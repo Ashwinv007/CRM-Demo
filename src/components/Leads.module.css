@@ -1,0 +1,31 @@
+.statusBadge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  min-width: 100px;
+  text-align: center;
+}
+
+.statusBadge.new {
+  background-color: #dbeafe;
+  color: #1e40af;
+}
+
+.statusBadge.follow-up {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.statusBadge.not-interested {
+  background-color: #fee2e2;
+  color: #991b1b;
+}
+
+.statusBadge.converted {
+  background-color: #d1fae5;
+  color: #065f46;
+}

@@ -1,0 +1,551 @@
+.container {
+  flex: 1;
+  padding: 32px;
+  background-color: #f5f5f5;
+  overflow-y: auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.header h1 {
+  margin: 0 0 8px 0;
+  color: #1a4d5c;
+}
+
+.subtitle {
+  margin: 0;
+  color: #666;
+}
+
+.totalAmount {
+  color: #2b7a8e;
+}
+
+.filterInfo {
+  color: #666;
+  font-size: 0.9em;
+}
+
+.headerButtons {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.exportButton {
+  background-color: white !important;
+  color: #1a4d5c !important;
+  border-color: #1a4d5c !important;
+  text-transform: none !important;
+}
+
+.exportButton:hover {
+  background-color: #f0f9fb !important;
+  border-color: #2b7a8e !important;
+}
+
+.categoryButton {
+  background-color: white !important;
+  color: #2b7a8e !important;
+  border-color: #2b7a8e !important;
+  text-transform: none !important;
+}
+
+.categoryButton:hover {
+  background-color: #f0f9fb !important;
+  border-color: #1a4d5c !important;
+}
+
+.addButton {
+  background-color: #2b7a8e !important;
+  color: white !important;
+  text-transform: none !important;
+}
+
+.addButton:hover {
+  background-color: #1a4d5c !important;
+}
+
+.tableContainer {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table thead {
+  background-color: #f8fafc;
+  color: #334155;
+  border-bottom: 1px solid #e2e8f0;
+}
+
+.table th {
+  padding: 16px;
+  text-align: left;
+  font-weight: 600;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.table td {
+  padding: 16px;
+  border-bottom: 1px solid #e2e8f0;
+  color: #475569;
+  font-size: 14px;
+}
+
+.table tbody tr:hover {
+  background-color: #f8fafc;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.categoryBadge {
+  display: inline-block;
+  padding: 4px 12px;
+  border-radius: 16px;
+  font-weight: 500;
+  font-size: 13px;
+  transition: all 0.2s;
+}
+
+.amount {
+  color: #1a4d5c;
+  font-weight: 600;
+}
+
+.notes {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emptyState {
+  text-align: center !important;
+  color: #999;
+  padding: 40px !important;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.editButton {
+  color: #2b7a8e !important;
+}
+
+.editButton:hover {
+  background-color: #e3f2f7 !important;
+}
+
+.deleteButton {
+  color: #d32f2f !important;
+}
+
+.deleteButton:hover {
+  background-color: #ffebee !important;
+}
+
+.closeButton {
+  position: absolute !important;
+  right: 8px;
+  top: 8px;
+  color: #666 !important;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: 8px 0;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.saveButton {
+  background-color: #2b7a8e !important;
+  color: white !important;
+  text-transform: none !important;
+}
+
+.saveButton:hover {
+  background-color: #1a4d5c !important;
+}
+
+.categoryForm {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 8px 0;
+}
+
+.categoryInput {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.categoryInputActions {
+  display: flex;
+  gap: 8px;
+}
+
+.categoryList {
+  border-top: 1px solid #e0e0e0;
+  padding-top: 16px;
+}
+
+.categoryList h3 {
+  margin: 0 0 16px 0;
+  color: #1a4d5c;
+}
+
+.categoryItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  margin-bottom: 8px;
+}
+
+.categoryItemActions {
+  display: flex;
+  gap: 4px;
+}
+
+.filtersContainer {
+  background-color: white;
+  padding: 20px;
+  border-radius: 8px;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+  margin-bottom: 24px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.filterControl {
+  min-width: 200px;
+  flex: 1;
+}
+
+.resetButton {
+  background-color: white !important;
+  color: #666 !important;
+  border-color: #ccc !important;
+  text-transform: none !important;
+}
+
+.resetButton:hover {
+  background-color: #f5f5f5 !important;
+  border-color: #999 !important;
+}
+
+.categoryInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.usageCount {
+  font-size: 0.85em;
+  color: #666;
+}
+
+.reportsButton {
+  background-color: white !important;
+  color: #1a4d5c !important;
+  border-color: #1a4d5c !important;
+  text-transform: none !important;
+}
+
+.reportsButton:hover {
+  background-color: #f0f9fb !important;
+  border-color: #2b7a8e !important;
+}
+
+.reportTabs {
+  margin-bottom: 24px !important;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.reportContent {
+  padding: 16px 0;
+}
+
+.reportSectionTitle {
+  margin: 0 0 24px 0;
+  color: #1a4d5c;
+}
+
+.emptyReportMessage {
+  text-align: center;
+  color: #999;
+  padding: 40px;
+}
+
+.reportCard {
+  margin-bottom: 24px !important;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1) !important;
+}
+
+.reportCardHeader {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 2px solid #e0e0e0;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+.reportCardHeader h4 {
+  margin: 0;
+  color: #1a4d5c;
+}
+
+.reportTotal {
+  color: #2b7a8e;
+  font-size: 1.2em;
+}
+
+.chartContainer {
+  margin-bottom: 24px;
+}
+
+.categoryBreakdown {
+  margin-top: 24px;
+}
+
+.categoryBreakdown h5 {
+  margin: 0 0 16px 0;
+  color: #1a4d5c;
+}
+
+.categoryBreakdownItem {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background-color: #f9f9f9;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+
+.categoryLabelWithColor {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+}
+
+.categoryColorDot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+}
+
+.categoryAmount {
+  color: #1a4d5c;
+  margin: 0 16px;
+}
+
+.categoryPercentage {
+  color: #666;
+  font-size: 0.9em;
+  min-width: 60px;
+  text-align: right;
+}
+
+.groupHeader {
+  background-color: #f1f5f9 !important;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.groupHeader:hover {
+  background-color: #f1f5f9 !important;
+}
+
+.groupHeaderContent {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 16px;
+}
+
+.groupLabel {
+  color: #1e293b;
+  font-weight: 600;
+}
+
+.groupTotal {
+  color: #475569;
+  font-size: 13px;
+}
+
+.groupedRow {
+  background-color: #ffffff;
+}
+
+.hideOnTablet,
+.hideOnMobile {
+  display: none;
+}
+
+@media (min-width: 1025px) {
+  .hideOnTablet,
+  .hideOnMobile {
+    display: table-cell;
+  }
+}
+@media (min-width: 768px) and (max-width: 1024px) {
+  .hideOnMobile {
+    display: table-cell;
+  }
+  .hideOnTablet {
+    display: none;
+  }
+  .container {
+    padding: 24px;
+  }
+  .filtersContainer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+@media (max-width: 767px) {
+  .container {
+    padding: 16px;
+  }
+  .header {
+    flex-direction: column;
+    gap: 16px;
+    align-items: stretch;
+  }
+  .headerButtons {
+    justify-content: stretch;
+  }
+  .headerButtons > button {
+    flex-grow: 1;
+  }
+  .filtersContainer {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .tableContainer {
+    overflow-x: initial;
+    border: none;
+    background-color: transparent;
+    box-shadow: none;
+  }
+  .table {
+    min-width: 0;
+    border: 0;
+  }
+  .table thead {
+    display: none;
+  }
+  .table tr {
+    display: block;
+    margin-bottom: 1rem;
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    background-color: #ffffff;
+    padding: 8px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.07);
+  }
+  .table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 8px;
+    border-bottom: 1px solid #f1f5f9;
+    text-align: right;
+  }
+  .table td:last-child {
+    border-bottom: none;
+  }
+  .table td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    color: #334155;
+    text-align: left;
+    padding-right: 1rem;
+  }
+  .hideOnMobile, .hideOnTablet {
+    display: flex;
+  }
+  .actions {
+    justify-content: flex-end;
+    flex: 1;
+  }
+  .groupHeader {
+    top: -16px; 
+    margin: 0 -16px; 
+    width: calc(100% + 32px);
+  }
+  .groupHeader td {
+    border: none;
+  }
+  .groupHeader:hover {
+    background-color: #f1f5f9 !important;
+  }
+  .table .groupHeader tr, .table tr.groupHeader {
+    padding: 0;
+    border: none;
+    background-color: transparent;
+    box-shadow: none;
+    margin-bottom: 8px;
+  }
+
+  /* Report Modal Specific */
+  .reportCardHeader {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .reportCardHeader > div {
+    flex-direction: column;
+    width: 100%;
+  }
+  .chartContainer {
+    height: 250px;
+  }
+  .categoryBreakdownItem {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .categoryAmount {
+    margin: 0;
+  }
+  .categoryPercentage {
+    text-align: left;
+  }
+}

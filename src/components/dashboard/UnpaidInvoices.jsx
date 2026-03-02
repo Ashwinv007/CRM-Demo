@@ -1,0 +1,87 @@
+import React, { useEffect, useState } from 'react';
+import styles from '../Dashboard.module.css';
+import { collection, getDocs, query } from 'firebase/firestore';
+import { db } from '../../firebase/config';
+import { usePermissions } from '../../auth/usePermissions';
+import { Receipt, ExternalLink } from 'lucide-react';
+
+
+
+const formatCurrency = (amount) => {
+    return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', minimumFractionDigits: 0 }).format(amount);
+};
+
+const UnpaidInvoices = () => {
+    const { hasPermission } = usePermissions();
+    const [unpaidInvoices, setUnpaidInvoices] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchUnpaidInvoices = async () => {
+            try {
+                const invoicesCollection = collection(db, 'invoices');
+                const invoicesSnapshot = await getDocs(invoicesCollection);
+                const allInvoices = invoicesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                const unpaid = allInvoices.filter(invoice => invoice.paymentStatus !== 'Paid');
+                setUnpaidInvoices(unpaid);
+            } catch (error) {
+                console.error("Firebase permission error fetching unpaid invoices:", error);
+                setUnpaidInvoices([]); // Set to empty array on error
+            } finally {
+                setLoading(false);
+            }
+        };
+
+        if (hasPermission('invoices:view')) {
+            fetchUnpaidInvoices();
+        } else {
+            setLoading(false);
+            setUnpaidInvoices([]);
+        }
+    }, [hasPermission]);
+
+    if (loading) {
+        return null;
+    }
+
+    if (!hasPermission('invoices:view') || unpaidInvoices.length === 0) {
+        return null;
+    }
+
+    return (
+        <div className={styles.card}>
+            <div className={styles.header}>
+                <div className={styles.titleWrapper}>
+                    <Receipt size={20} className={styles.headerIcon} />
+                    <h3 className={styles.invoiceTitle}>Unpaid Invoices</h3>
+                </div>
+                <span className={styles.count}>{unpaidInvoices.length}</span>
+            </div>
+
+            <div className={styles.list}>
+                {unpaidInvoices.slice(0, 5).map((invoice) => (
+                    <div key={invoice.id} className={styles.item}>
+                        <div className={styles.info}>
+                            <div className={styles.invoiceHeader}>
+                                <span className={styles.invoiceId}>{invoice.invoiceNumber || `#${invoice.id}`}</span>
+                                <span className={styles.status}>{invoice.paymentStatus || 'Unpaid'}</span>
+                            </div>
+                            <div className={styles.client}>{invoice.clientName || invoice.name}</div>
+                            <div className={styles.description}>{invoice.items && invoice.items[0]?.description}</div>
+                            <div className={styles.footer}>
+                                <span className={styles.amount}>{formatCurrency(invoice.totalAmountPayable)}</span>
+                            </div>
+                        </div>
+
+                    </div>
+                ))}
+            </div>
+
+            {/* <div className={styles.viewAll}>
+                View All Invoices
+            </div> */}
+        </div>
+    );
+};
+
+export default UnpaidInvoices;

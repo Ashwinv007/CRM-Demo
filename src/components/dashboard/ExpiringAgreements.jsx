@@ -1,0 +1,98 @@
+import React, { useEffect, useState } from 'react';
+import styles from '../Dashboard.module.css';
+import { collection, getDocs, query, where, Timestamp } from 'firebase/firestore';
+import { db } from '../../firebase/config';
+import { usePermissions } from '../../auth/usePermissions';
+import { FileWarning, AlertCircle } from 'lucide-react';
+
+const ExpiringAgreements = () => {
+    const { hasPermission } = usePermissions();
+    const [agreements, setAgreements] = useState([]);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        const fetchExpiringAgreements = async () => {
+            if (hasPermission('agreements:view')) {
+                try {
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0); // Start of today
+                    const oneWeekFromNow = new Date(today.getTime() + 7 * 24 * 60 * 60 * 1000);
+
+                    const agreementsCollection = collection(db, 'agreements');
+
+                    const q = query(
+                        agreementsCollection,
+                        where('status', '==', 'active'),
+                        where('endDate', '<', Timestamp.fromDate(oneWeekFromNow)),
+                        where('endDate', '>=', Timestamp.fromDate(today))
+                    );
+                    
+                    const agreementsSnapshot = await getDocs(q);
+                    const expiringAgreements = agreementsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                    setAgreements(expiringAgreements);
+                } catch (error) {
+                    console.error("Firebase permission error fetching expiring agreements:", error);
+                    setAgreements([]); // Set to empty array on error
+                }
+            }
+            setLoading(false);
+        };
+
+        fetchExpiringAgreements();
+    }, [hasPermission]);
+
+    const calculateDaysLeft = (endDate) => {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0); // For consistent day difference
+        const end = endDate.toDate();
+        end.setHours(0, 0, 0, 0); // For consistent day difference
+        const diffTime = end.getTime() - today.getTime();
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        return diffDays;
+    };
+
+    if (!hasPermission('agreements:view') || agreements.length === 0) {
+        return null;
+    }
+
+    if (loading) {
+        return null; // Don't show loading placeholder, just wait for data
+    }
+
+
+    return (
+        <div className={styles.card}>
+            <div className={styles.header}>
+                <div className={styles.titleWrapper}>
+                    <FileWarning size={20} className={styles.expiringAgreementsHeaderIcon} />
+                    <h3 className={styles.invoiceTitle}>Expiring Agreements (Next 7 Days)</h3>
+                </div>
+            </div>
+            
+            <div className={styles.agreementsList}>
+                {agreements.length > 0 ? (
+                    agreements.map((agreement) => (
+                        <div key={agreement.id} className={styles.agreementsItem}>
+                            <div className={styles.agreementsIconWrapper}>
+                                <AlertCircle size={18} />
+                            </div>
+                            <div className={styles.agreementsInfo}>
+                                <div className={styles.agreementsClient}>{agreement.name}</div>
+                                <div className={styles.agreementsDate}>Expires on: {agreement.endDate.toDate().toLocaleDateString('en-GB')}</div>
+                            </div>
+                            <div className={styles.agreementsBadge}>
+                                {calculateDaysLeft(agreement.endDate)} days
+                            </div>
+                        </div>
+                    ))
+                ) : (
+                    <div className={styles.emptyClients}>
+                        No agreements expiring soon.
+                    </div>
+                )}
+            </div>
+        </div>
+    );
+};
+
+export default ExpiringAgreements;

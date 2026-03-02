@@ -1,0 +1,232 @@
+
+import React, { useEffect, useState } from 'react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+import styles from '../Dashboard.module.css';
+import { collection, getDocs, query, where, Timestamp } from 'firebase/firestore';
+import { db } from '../../firebase/config';
+import { usePermissions } from '../../auth/usePermissions';
+import { TrendingDown, ChevronDown } from 'lucide-react';
+
+const ExpenseChart = () => {
+    const { hasPermission } = usePermissions();
+    const [period, setPeriod] = useState('week');
+    const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+    const [data, setData] = useState([]);
+    const [loading, setLoading] = useState(true);
+    const [error, setError] = useState(null); // Added error state
+
+    useEffect(() => {
+        const fetchData = async () => {
+            if (hasPermission('expenses:view')) {
+                setLoading(true);
+                setError(null); // Clear previous errors
+                try {
+                    const now = new Date();
+                    let startDate;
+
+                    if (period === 'week') {
+                        startDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6);
+                    } else if (period === 'month') {
+                        startDate = new Date(now.getFullYear(), now.getMonth(), 1);
+                    } else {
+                        startDate = new Date(now.getFullYear(), 0, 1);
+                    }
+
+                    const expensesCollection = collection(db, 'expenses');
+                    const q = query(
+                        expensesCollection,
+                        where('date', '>=', Timestamp.fromDate(startDate))
+                    );
+                    const snapshot = await getDocs(q);
+                    const expenses = snapshot.docs.map(doc => ({ ...doc.data(), id: doc.id }));
+
+                    // Process data for chart
+                    const chartData = [];
+                    if (period === 'week') {
+                        const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+                        const dayExpenses = new Array(7).fill(0);
+                        expenses.forEach(expense => {
+                            const expenseDate = expense.date.toDate();
+                            const day = expenseDate.getUTCDay(); // Use UTC day
+                            dayExpenses[day] += parseFloat(expense.amount);
+                        });
+                        for (let i = 0; i < 7; i++) {
+                            // Align labels with UTC days for consistency
+                            chartData.push({ label: days[(now.getUTCDay() - 6 + i + 7) % 7], expenses: dayExpenses[(now.getUTCDay() - 6 + i + 7) % 7] });
+                        }
+                    } else if (period === 'month') {
+                        const monthDayExpenses = new Array(now.getUTCDate()).fill(0); // Use UTC date for array size
+                        expenses.forEach(expense => {
+                            const expenseDate = expense.date.toDate();
+                            if (expenseDate.getUTCMonth() === now.getUTCMonth() && expenseDate.getUTCFullYear() === now.getUTCFullYear()) {
+                                const day = expenseDate.getUTCDate() - 1; // Use UTC date
+                                monthDayExpenses[day] += parseFloat(expense.amount);
+                            }
+                        });
+                        for (let i = 0; i < now.getUTCDate(); i++) { // Use UTC date for loop
+                            chartData.push({ label: String(i + 1), expenses: monthDayExpenses[i] });
+                        }
+                    } else { // year
+                        const monthExpenses = new Array(12).fill(0);
+                        expenses.forEach(expense => {
+                            const expenseDate = expense.date.toDate();
+                            if (expenseDate.getUTCFullYear() === now.getUTCFullYear()) {
+                                const month = expenseDate.getUTCMonth(); // Use UTC month
+                                monthExpenses[month] += parseFloat(expense.amount);
+                            }
+                        });
+                        const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+                        for (let i = 0; i < 12; i++) {
+                            chartData.push({ label: monthNames[i], expenses: monthExpenses[i] });
+                        }
+                    }
+                    setData(chartData);
+                } catch (err) {
+                    console.error("Error fetching expense data:", err);
+                    setError("Failed to load expense data.");
+                    setData([]); // Set data to empty on error
+                } finally {
+                    setLoading(false);
+                }
+            } else {
+                setLoading(false);
+                setData([]); // Ensure data is empty if no permission
+            }
+        };
+
+        fetchData();
+    }, [hasPermission, period]);
+
+    const totalExpenses = data.reduce((sum, item) => sum + item.expenses, 0);
+    const currentValue = data.length > 0 ? data[data.length - 1].expenses : 0;
+    const previousValue = data.length > 1 ? data[data.length - 2].expenses : 0;
+    const changePercent = previousValue !== 0 ? ((currentValue - previousValue) / previousValue * 100).toFixed(1) : (currentValue !== 0 ? '100.0' : '0.0');
+
+    const periodLabels = {
+        week: 'This Week',
+        month: 'This Month',
+        year: 'This Year'
+    };
+
+    if (loading && data.length === 0) {
+        return null;
+    }
+
+    if (!hasPermission('expenses:view') || data.length === 0 || error) { // Also check for error
+        return null;
+    }
+
+    return (
+        <div className={styles.card}>
+            <div className={styles.header}>
+                <div>
+                    <div className={styles.titleWrapper}>
+                        <TrendingDown size={20} className={styles.expenseChartHeaderIcon} />
+                        <h3 className={styles.invoiceTitle}>Expenses</h3>
+                    </div>
+                    <div className={styles.expenseChartSubtitle}>Current: ₹{currentValue.toLocaleString('en-IN')}</div>
+                </div>
+                <div className={styles.expenseChartHeaderRight}>
+                    <div className={styles.expenseChartStats}>
+                        <div className={styles.expenseChartStat}>
+                            <div className={styles.expenseChartStatValue}>₹{(totalExpenses / 1000).toFixed(1)}K</div>
+                            <div className={styles.expenseChartStatLabel}>Total</div>
+                        </div>
+                        <div className={styles.expenseChartStat}>
+                            <div className={styles.expenseChartStatValue} style={{ color: parseFloat(changePercent) > 0 ? '#dc2626' : '#059669' }}>
+                                {parseFloat(changePercent) > 0 ? '+' : ''}{changePercent}%
+                            </div>
+                            <div className={styles.expenseChartStatLabel}>Change</div>
+                        </div>
+                    </div>
+                    <div className={styles.expenseChartDropdown}>
+                        <button 
+                            className={styles.expenseChartDropdownButton}
+                            onClick={() => setIsDropdownOpen(!isDropdownOpen)}
+                        >
+                            {periodLabels[period]}
+                            <ChevronDown size={16} />
+                        </button>
+                        {isDropdownOpen && (
+                            <div className={styles.expenseChartDropdownMenu}>
+                                <div 
+                                    className={`${styles.expenseChartDropdownItem} ${period === 'week' ? styles.active : ''}`}
+                                    onClick={() => {
+                                        setPeriod('week');
+                                        setIsDropdownOpen(false);
+                                    }}
+                                >
+                                    This Week
+                                </div>
+                                <div 
+                                    className={`${styles.expenseChartDropdownItem} ${period === 'month' ? styles.active : ''}`}
+                                    onClick={() => {
+                                        setPeriod('month');
+                                        setIsDropdownOpen(false);
+                                    }}
+                                >
+                                    This Month
+                                </div>
+                                <div 
+                                    className={`${styles.expenseChartDropdownItem} ${period === 'year' ? styles.active : ''}`}
+                                    onClick={() => {
+                                        setPeriod('year');
+                                        setIsDropdownOpen(false);
+                                    }}
+                                >
+                                    This Year
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                </div>
+            </div>
+            
+            <div className={styles.chartContainer}>
+                {loading ? <p>Loading...</p> :
+                    <ResponsiveContainer width="100%" height="100%">
+                        <AreaChart data={data} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                            <defs>
+                                <linearGradient id="expenseGradient" x1="0" y1="0" x2="0" y2="1">
+                                    <stop offset="5%" stopColor="#1a4d5c" stopOpacity={0.3}/>
+                                    <stop offset="95%" stopColor="#1a4d5c" stopOpacity={0}/>
+                                </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" vertical={false} />
+                            <XAxis 
+                                dataKey="label" 
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fill: '#666', fontSize: 12 }}
+                            />
+                            <YAxis 
+                                axisLine={false}
+                                tickLine={false}
+                                tick={{ fill: '#666', fontSize: 12 }}
+                                tickFormatter={(value) => `₹${value / 1000}K`}
+                            />
+                            <Tooltip 
+                                contentStyle={{
+                                    background: 'white',
+                                    border: '1px solid rgba(0, 0, 0, 0.1)',
+                                    borderRadius: '8px',
+                                    boxShadow: '0 4px 12px rgba(0, 0, 0, 0.1)'
+                                }}
+                                formatter={(value) => [`₹${value.toLocaleString('en-IN')}`, 'Expenses']}
+                            />
+                            <Area 
+                                type="monotone" 
+                                dataKey="expenses" 
+                                stroke="#1a4d5c" 
+                                strokeWidth={3}
+                                fill="url(#expenseGradient)" 
+                            />
+                        </AreaChart>
+                    </ResponsiveContainer>
+                }
+            </div>
+        </div>
+    );
+};
+
+export default ExpenseChart;

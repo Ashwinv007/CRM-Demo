@@ -1,0 +1,6 @@
+{
+  "projects": {
+    "default": "trial-bench--crm",
+    "dev": "trial-bench-dev-10946"
+  }
+}

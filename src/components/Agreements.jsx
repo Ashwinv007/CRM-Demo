@@ -1,0 +1,1166 @@
+import { useState, useEffect, useContext, useMemo } from 'react';
+import { Dialog, DialogTitle, DialogContent, TextField, Button, IconButton, MenuItem, Box, InputAdornment, Select, CircularProgress, Typography } from '@mui/material';
+import { Close, Visibility } from '@mui/icons-material';
+import styles from './Agreements.module.css';
+import { FirebaseContext, AuthContext } from '../store/Context'; // Keep FirebaseContext for db operations
+import { doc, getDoc, updateDoc, deleteDoc, serverTimestamp, Timestamp, collection } from 'firebase/firestore'; // Removed getDocs, query, orderBy, limit, startAfter
+import { getFunctions, httpsCallable } from 'firebase/functions';
+import { saveAs } from 'file-saver';
+import { toast } from 'sonner';
+import { logActivity } from '../utils/logActivity';
+import { usePermissions } from '../auth/usePermissions';
+import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
+import { AdapterDayjs } from '@mui/x-date-pickers/AdapterDayjs';
+import { DatePicker } from '@mui/x-date-pickers/DatePicker';
+import dayjs from 'dayjs';
+import ExitDateModal from './ExitDateModal';
+import SearchIcon from '@mui/icons-material/Search';
+import ClientProfileModal from './ClientProfileModal';
+import { useData } from '../store/DataContext'; // Import useData
+
+const generateAgreementNumber = (memberPackageName, allAgreements) => {
+  if (!memberPackageName) {
+    return '';
+  }
+
+  const currentDate = new Date();
+  const currentYear = currentDate.getFullYear().toString().slice(-2);
+  const month = currentDate.getMonth();
+  
+  const monthChar = String.fromCharCode(65 + month); // A=Jan, B=Feb, ...
+
+  const packageChar = memberPackageName.charAt(0).toUpperCase();
+
+  const filteringPrefix = `TB${currentYear}${monthChar}`; // New variable for filtering
+
+  const relevantAgreements = allAgreements.filter(a => a.agreementNumber?.startsWith(filteringPrefix));
+  
+  let maxSeq = 0;
+  relevantAgreements.forEach(a => {
+    const seqStr = a.agreementNumber.slice(-4); // Get the last 4 characters
+    const seqNum = parseInt(seqStr, 10);
+    if (!isNaN(seqNum) && seqNum > maxSeq) {
+      maxSeq = seqNum;
+    }
+  });
+
+  const newSeq = String(maxSeq + 1).padStart(4, '0');
+
+  // Construct the final agreement number with packageChar included
+  return `TB${currentYear}${monthChar}${packageChar}${newSeq}`;
+};
+
+export default function Agreements() {
+  const { db } = useContext(FirebaseContext);
+  const { user } = useContext(AuthContext);
+  const { agreements, loading, refreshing, refreshData, leads, prefetchClientProfile } = useData(); // Use agreements, loading, refreshing, refreshData and leads from DataContext
+  const { hasPermission } = usePermissions();
+  // const [allAgreements, setAllAgreements] = useState([]); // Removed local state
+  // const [isLoading, setIsLoading] = useState(true); // Removed local state
+  // const [totalAgreementsCount, setTotalAgreementsCount] = useState(0); // Removed local state
+  // const [allAgreementsFetched, setAllAgreementsFetched] = useState(false); // Removed local state
+  const [searchQuery, setSearchQuery] = useState('');
+  const [statusFilter, setStatusFilter] = useState('Active');
+  const [selectedAgreement, setSelectedAgreement] = useState(null);
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [selectedClientId, setSelectedClientId] = useState(null);
+  const [isOtherPackage, setIsOtherPackage] = useState(false);
+  const [agreementGenerated, setAgreementGenerated] = useState(null);
+  const [isExitModalOpen, setIsExitModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isExiting, setIsExiting] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isVirtualOfficeFlow, setIsVirtualOfficeFlow] = useState(false);
+  const [selectedVOPlan, setSelectedVOPlan] = useState('');
+  const [latestAuthDetails, setLatestAuthDetails] = useState({ // New state for latest auth details
+    authorizorName: '',
+    designation: '',
+    preparedByNew: '',
+  });
+  const [formData, setFormData] = useState({
+    memberLegalName: '',
+    memberCIN: '',
+    memberGST: '',
+    memberPAN: '',
+    memberKYC: '',
+    memberAddress: '',
+    agreementDate: '',
+    agreementNumber: '',
+    startDate: '',
+    endDate: '',
+    servicePackage: '',
+    serviceQuantity: 1,
+    totalMonthlyPayment: '',
+    authorizorName: '',
+    designation: '',
+    preparedByNew: '',
+    clientAuthorizorName: '',
+    clientAuthorizorTitle: '',
+    agreementLength: '',
+    seatNumber: '',
+  });
+
+  const functions = getFunctions();
+  const sendAgreementEmailCallable = httpsCallable(functions, 'sendAgreementEmail');
+  const earlyExitAgreementCallable = httpsCallable(functions, 'earlyExitAgreement');
+
+  // Removed useEffect for fetching agreements, now handled by DataContext
+  // The processAgreementsWithLeads logic is now handled in DataContext, but some client-side join might be needed if not fully handled.
+  // For now, `agreements` from context should already be combined with lead data.
+
+  const displayedAgreements = useMemo(() => {
+    let filtered = agreements; // Use agreements from context
+
+    if (statusFilter === 'Active') {
+        filtered = filtered.filter(a => a.status !== 'terminated');
+    } else if (statusFilter === 'Terminated') {
+        filtered = filtered.filter(a => a.status === 'terminated');
+    }
+
+    if (searchQuery) {
+        const lowercasedQuery = searchQuery.toLowerCase();
+        filtered = filtered.filter(a => 
+            (a.memberLegalName || a.name)?.toLowerCase().includes(lowercasedQuery) ||
+            (a.convertedEmail)?.toLowerCase().includes(lowercasedQuery) ||
+            (a.phone)?.toLowerCase().includes(lowercasedQuery)
+        );
+    }
+
+    // Sort as before (assuming 'agreements' from context is not pre-sorted in the desired way)
+    return filtered.sort((a, b) => {
+        const getDate = (field) => {
+            if (field) {
+                if (typeof field.toDate === 'function') return field.toDate();
+                if (typeof field === 'string') return new Date(field);
+            }
+            return null;
+        };
+
+        const dateA = getDate(a.lastEditedAt || a.createdAt);
+        const dateB = getDate(b.lastEditedAt || b.createdAt);
+
+        if (dateA && dateB) return dateB.getTime() - dateA.getTime();
+        if (dateA) return -1;
+        if (dateB) return 1;
+
+        const agreementDateA = a.agreementDate ? new Date(a.agreementDate) : null;
+        const agreementDateB = b.agreementDate ? new Date(b.agreementDate) : null;
+
+        if (agreementDateA && agreementDateB) return agreementDateB.getTime() - agreementDateA.getTime();
+        if (agreementDateA) return -1;
+        if (agreementDateB) return 1;
+        return 0;
+    });
+  }, [agreements, statusFilter, searchQuery]); // Depend on agreements from context
+
+  useEffect(() => {
+    if (formData.startDate && formData.agreementLength) {
+      const startDate = new Date(formData.startDate);
+      const length = parseInt(formData.agreementLength, 10);
+      if (!isNaN(startDate.getTime()) && !isNaN(length)) {
+        const endDate = dayjs(startDate).add(length, 'month').subtract(1, 'day');
+        setFormData((prev) => ({
+          ...prev,
+          endDate: endDate.format('YYYY-MM-DD'),
+        }));
+      }
+    }
+  }, [formData.startDate, formData.agreementLength]);
+
+  useEffect(() => {
+    if (isModalOpen && (!selectedAgreement?.agreementNumber)) {
+      const newAgreementNumber = generateAgreementNumber(selectedAgreement?.purposeOfVisit, agreements); // Use agreements from context
+      if (newAgreementNumber) {
+        setFormData(prev => ({ ...prev, agreementNumber: newAgreementNumber }));
+      }
+    }
+  }, [selectedAgreement?.purposeOfVisit, isModalOpen, selectedAgreement, agreements]); // Depend on agreements from context
+
+  const handleViewProfileClick = (event, leadId) => {
+    event.stopPropagation();
+    setSelectedClientId(leadId);
+    setIsProfileModalOpen(true);
+  };
+
+  const handleRowClick = (agreement) => {
+    if (!hasPermission('agreements:view')) return;
+    setAgreementGenerated(null);
+    setSelectedAgreement(agreement);
+
+    // Helper to convert Firestore Timestamp or string to YYYY-MM-DD string
+    const toDateString = (dateField) => {
+      if (!dateField) return '';
+      // Handle Firestore Timestamp
+      if (typeof dateField.toDate === 'function') {
+        return dateField.toDate().toISOString().split('T')[0];
+      }
+      // Handle ISO string
+      if (typeof dateField === 'string') {
+        return dateField.split('T')[0];
+      }
+      // Handle JS Date Object
+      if (dateField instanceof Date) {
+        return dateField.toISOString().split('T')[0];
+      }
+      return ''; // Return empty for other types
+    };
+
+    // Prioritize servicePackage and serviceQuantity from the agreement directly
+    // If not present, fall back to purposeOfVisit for servicePackage
+    let currentServicePackage = agreement.servicePackage || agreement.purposeOfVisit || '';
+    let currentServiceQuantity = agreement.serviceQuantity || 1;
+    let currentIsOtherPackage = false;
+    const standardPackages = ["Dedicated Desk", "Flexible Desk", "Private Cabin", "Virtual Office", "Meeting Room"];
+
+    // Determine if the package is 'Other' for non-virtual office types
+    if (currentServicePackage && !standardPackages.includes(currentServicePackage)) {
+        currentIsOtherPackage = true;
+    }
+
+    // Handle Virtual Office flow
+    if (currentServicePackage === 'Virtual Office') {
+        setIsVirtualOfficeFlow(true);
+        let voPlan = '';
+        if (agreement.serviceAgreementType) {
+            const parts = agreement.serviceAgreementType.split(' - ');
+            if (parts.length > 1 && ['Basic', 'Plus', 'Platinum'].includes(parts[1])) {
+                voPlan = parts[1];
+            }
+        }
+        setSelectedVOPlan(voPlan);
+
+        setFormData({
+            memberLegalName: agreement.memberLegalName || agreement.name || '',
+            agreementDate: toDateString(agreement.agreementDate) || dayjs().format('YYYY-MM-DD'),
+            agreementNumber: agreement.agreementNumber || (voPlan ? generateAgreementNumber('Virtual Office', agreements) : ''),
+            startDate: toDateString(agreement.startDate),
+            agreementLength: agreement.agreementLength || '',
+            endDate: toDateString(agreement.endDate),
+            clientAuthorizorName: agreement.clientAuthorizorName || '',
+            clientAuthorizorTitle: agreement.clientAuthorizorTitle || '',
+            authorizorName: agreement.authorizorName || latestAuthDetails.authorizorName,
+            designation: agreement.designation || latestAuthDetails.designation,
+            preparedByNew: agreement.preparedByNew || latestAuthDetails.preparedByNew,
+            seatNumber: agreement.seatNumber || '',
+            // Do not set servicePackage or serviceQuantity directly here,
+            // as they are handled by the VO-specific logic and selectedVOPlan
+        });
+        setIsModalOpen(true);
+        return; // End VO flow
+    }
+    setIsVirtualOfficeFlow(false); // Not VO, so set to false
+    setSelectedVOPlan(''); // Clear VO plan if not VO flow
+
+
+    setFormData({
+      memberLegalName: agreement.memberLegalName || '',
+      memberCIN: agreement.memberCIN || 'Not Applicable',
+      memberGST: agreement.memberGST || 'Not Applicable',
+      memberPAN: agreement.memberPAN || 'Not Applicable',
+      memberKYC: agreement.memberKYC || 'Not Applicable',
+      memberAddress: agreement.memberAddress || '',
+      agreementDate: toDateString(agreement.agreementDate),
+      agreementNumber: agreement.agreementNumber || '',
+      startDate: toDateString(agreement.startDate),
+      endDate: toDateString(agreement.endDate),
+      servicePackage: currentServicePackage, // Use the determined servicePackage
+      serviceQuantity: currentServiceQuantity, // Use the determined serviceQuantity
+      totalMonthlyPayment: agreement.totalMonthlyPayment || '',
+      authorizorName: agreement.authorizorName || latestAuthDetails.authorizorName || '',
+      designation: agreement.designation || latestAuthDetails.designation || '',
+      preparedByNew: agreement.preparedByNew || latestAuthDetails.preparedByNew || '',
+      clientAuthorizorName: agreement.clientAuthorizorName || '',
+      clientAuthorizorTitle: agreement.clientAuthorizorTitle || '',
+      agreementLength: agreement.agreementLength || '',
+    });
+    setIsOtherPackage(currentIsOtherPackage); // Set based on determination
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setSelectedAgreement(null);
+    setAgreementGenerated(null);
+    setIsVirtualOfficeFlow(false);
+    setSelectedVOPlan('');
+  };
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+    if (name === 'servicePackage_select') {
+        if (value === 'Others') {
+            setIsOtherPackage(true);
+            setFormData(prev => ({...prev, servicePackage: ''}));
+        } else {
+            setIsOtherPackage(false);
+            setFormData(prev => ({...prev, servicePackage: value}));
+        }
+        return;
+    }
+    setFormData((prev) => ({
+      ...prev,
+      [name]: value,
+    }));
+  };
+
+  const handleDateChange = (name, newValue) => {
+    const formattedDate = newValue ? dayjs(newValue).format('YYYY-MM-DD') : '';
+    setFormData((prev) => ({
+      ...prev,
+      [name]: formattedDate,
+    }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!hasPermission('agreements:edit')) {
+        toast.error("You don't have permission to update agreements.");
+        return;
+    }
+    
+    if (!selectedAgreement) return;
+
+    if (!isVirtualOfficeFlow && (!formData.authorizorName || !formData.designation || !formData.preparedByNew)) {
+      toast.error("Authorization details are mandatory for non-virtual agreements.");
+      return;
+    }
+
+    setIsSubmitting(true);
+    try {
+        let serviceAgreementType;
+        if (isVirtualOfficeFlow) {
+            serviceAgreementType = `Virtual Office - ${selectedVOPlan}`;
+        } else {
+            serviceAgreementType = `${formData.servicePackage} - ${formData.serviceQuantity} nos`;
+        }
+
+        const dataToUpdate = {
+            ...formData,
+            serviceAgreementType: serviceAgreementType,
+            clientAuthorizorName: formData.clientAuthorizorName,
+            clientAuthorizorTitle: formData.clientAuthorizorTitle,
+            lastEditedAt: serverTimestamp(),
+            // Convert date strings to Firestore Timestamps
+            agreementDate: formData.agreementDate ? Timestamp.fromDate(new Date(formData.agreementDate)) : '',
+            startDate: formData.startDate ? Timestamp.fromDate(new Date(formData.startDate)) : '',
+            endDate: formData.endDate ? Timestamp.fromDate(new Date(formData.endDate)) : '',
+        };
+
+        const agreementRef = doc(db, 'agreements', selectedAgreement.id);
+        await updateDoc(agreementRef, dataToUpdate);
+
+        // No need to update local state directly, DataContext handles refresh
+        // setAllAgreements((prev) =>
+        //   prev.map((agreement) =>
+        //     agreement.id === selectedAgreement.id
+        //       ? updatedAgreement
+        //       : agreement
+        //   )
+        // );
+
+        if (selectedAgreement.leadId) {
+            const leadRef = doc(db, 'leads', selectedAgreement.leadId);
+            await updateDoc(leadRef, {
+                memberLegalName: formData.memberLegalName || '',
+                memberAddress: formData.memberAddress || '',
+                memberCIN: formData.memberCIN || '',
+                memberGST: formData.memberGST || '',
+                memberPAN: formData.memberPAN || '',
+                memberKYC: formData.memberKYC || '',
+                lastEditedAt: serverTimestamp(), // Update last edited timestamp for the lead as well
+            });
+            refreshData('leads'); // Refresh leads data after updating
+        }
+
+        const updatedAgreement = { ...selectedAgreement, ...dataToUpdate }; // For local display/generated
+        setAgreementGenerated(updatedAgreement);
+        refreshData('agreements'); // Refresh agreements data in context after update
+        logActivity(
+          db,
+          user,
+          'agreement_updated',
+          `Agreement "${updatedAgreement.agreementNumber}" for "${updatedAgreement.name}" was updated.`, 
+          { agreementId: updatedAgreement.id, agreementNumber: updatedAgreement.agreementNumber, memberName: updatedAgreement.name }
+        );
+        toast.success("Agreement updated successfully.");
+    } catch (error) {
+        console.error("Error updating agreement:", error);
+        toast.error("Failed to update agreement.");
+    } finally {
+        setIsSubmitting(false);
+    }
+  };
+
+  const handleDeleteClick = async () => {
+    if (!hasPermission('agreements:delete')) {
+        toast.error("You don't have permission to delete agreements.");
+        return;
+    }
+    if (!selectedAgreement) return;
+
+    if (window.confirm(`Are you sure you want to delete the agreement for ${selectedAgreement.name}? This action cannot be undone.`)) {
+      setIsDeleting(true);
+      try {
+        const agreementRef = doc(db, 'agreements', selectedAgreement.id);
+        await deleteDoc(agreementRef);
+
+        logActivity(
+          db,
+          user,
+          'agreement_deleted',
+          `Deleted agreement "${selectedAgreement.agreementNumber}" for member "${selectedAgreement.name}".`,
+          { agreementId: selectedAgreement.id, agreementNumber: selectedAgreement.agreementNumber, memberName: selectedAgreement.name }
+        );
+
+        refreshData('agreements'); // Refresh agreements data in context after deletion
+        toast.success("Agreement deleted successfully.");
+        handleCloseModal();
+      } catch (error) {
+        console.error("Error deleting agreement:", error);
+        toast.error("Failed to delete agreement.");
+      } finally {
+        setIsDeleting(false);
+      }
+    }
+  };
+
+    const formatDate = (dateField) => {
+        if (!dateField) return '-';
+        let date;
+        if (typeof dateField.toDate === 'function') { // Firestore Timestamp
+            date = dateField.toDate();
+        } else { // String or JS Date
+            date = new Date(dateField);
+        }
+        
+        if (isNaN(date.getTime())) {
+            return 'Invalid Date';
+        }
+    
+        const userTimezoneOffset = date.getTimezoneOffset() * 60000;
+        const adjustedDate = new Date(date.getTime() + userTimezoneOffset);
+        return adjustedDate.toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    };
+  
+    const splitTextIntoLines = (text, font, fontSize, maxWidth) => {
+      const words = text.split(' ');
+      let line = '';
+      const lines = [];
+    
+      for (const word of words) {
+        const testLine = line + word + ' ';
+        const testWidth = font.widthOfTextAtSize(testLine, fontSize);
+        if (testWidth > maxWidth) {
+          lines.push(line.trim());
+          line = word + ' ';
+        } else {
+          line = testLine;
+        }
+      }
+      lines.push(line.trim());
+    
+      return lines.slice(0, 3);
+    };
+  
+    const getAgreementPdfBase64 = async (agreementData) => {
+      const { PDFDocument, rgb } = await import('pdf-lib');
+      const fontkit = await import('@pdf-lib/fontkit'); // Import fontkit
+      const url = process.env.REACT_APP_AGREEMENT_PDF_PATH;
+      const existingPdfBytes = await fetch(url).then(res => res.arrayBuffer());
+    
+      const pdfDoc = await PDFDocument.load(existingPdfBytes);
+      pdfDoc.registerFontkit(fontkit.default); // Register fontkit
+      // Fetch a font that supports a wide range of characters
+      const fontUrl = 'https://cdn.jsdelivr.net/npm/notosans-fontface@latest/fonts/NotoSans-Regular.ttf';
+      const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
+      const notoSansFont = await pdfDoc.embedFont(fontBytes);
+    
+      const pages = pdfDoc.getPages();
+      const firstPage = pages[0];
+      const secondPage = pages[1];
+    
+      firstPage.drawText(agreementData.preparedByNew || '', {
+        x: 60,
+        y: 52,
+        font: notoSansFont,
+        size: 15,
+        color: rgb(0.466, 0.466, 0.466),
+      });
+    
+      for (let i = 1; i < pages.length; i++) {
+        pages[i].drawText(agreementData.agreementNumber || '', {
+          x: 487,
+          y: 729,
+          font: notoSansFont,
+          size: 8.5,
+          color: rgb(0.466, 0.466, 0.466),
+        });
+        pages[i].drawText(`(${agreementData.memberLegalName || ''})`, {
+          x: 89,
+          y: 105,
+          font: notoSansFont,
+          size: 11,
+          color: rgb(0, 0, 0),
+        });
+      }
+    
+      if (secondPage) {
+        secondPage.drawText(agreementData.serviceAgreementType || '', { x: 185, y: 394, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(`${agreementData.totalMonthlyPayment || ''} /-`, { x: 275, y: 380, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(formatDate(agreementData.endDate) || '', { x: 350, y: 408, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(formatDate(agreementData.startDate) || '', { x: 175, y: 408, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.agreementNumber || '', { x: 160, y: 437, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(formatDate(agreementData.agreementDate) || '', { x: 145, y: 451, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(
+          agreementData.agreementLength ? String(agreementData.agreementLength).padStart(2, '0') : '',
+          { x: 169, y: 422, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) }
+        );
+    
+        secondPage.drawText(agreementData.memberLegalName || '', { x: 170, y: 608, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.memberCIN || '', { x: 130, y: 594, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.memberGST || '', { x: 174, y: 579, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.memberPAN || '', { x: 133, y: 565, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.memberKYC || '', { x: 133, y: 551, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+    
+        const address = (agreementData.memberAddress || '').replace(/\n/g, ' ');
+        const addressLines = splitTextIntoLines(address, notoSansFont, 9.5, 300);
+        let y = 536.5;
+        for (const line of addressLines) {
+          secondPage.drawText(line, { x: 150, y, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+          y -= 12;
+        }
+    
+        secondPage.drawText(agreementData.clientAuthorizorName || '', { x: 150, y: 280, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.clientAuthorizorTitle || '', { x: 150, y: 266, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+    
+        secondPage.drawText(agreementData.authorizorName || '', { x: 370, y: 280, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.designation || '', { x: 370, y: 266, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        const currentDate = new Date();
+        secondPage.drawText(formatDate(currentDate), { x: 415, y: 252, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+        secondPage.drawText(formatDate(currentDate), { x: 150, y: 252, font: notoSansFont, size: 9.5, color: rgb(0, 0, 0) });
+      }
+    
+      const pdfBytes = await pdfDoc.save();
+      let binary = '';
+      for (let i = 0; i < pdfBytes.length; i++) {
+        binary += String.fromCharCode(pdfBytes[i]);
+      }
+      return btoa(binary);
+    };
+  
+  const getVOPdfBase64 = async (agreementData, voPlan) => {
+    const { PDFDocument, rgb } = await import('pdf-lib');
+    const fontkit = await import('@pdf-lib/fontkit');
+
+    let url;
+    if (voPlan === 'Basic' || voPlan === 'Plus') {
+        url = process.env.REACT_APP_VIRTUAL_AGREEMENT_PDF_BASIC_PLUS_PATH;
+    } else if (voPlan === 'Platinum') {
+        url = process.env.REACT_APP_VIRTUAL_AGREEMENT_PDF_PLATINUM_PATH;
+    } else {
+        console.error('Invalid Virtual Office plan selected for PDF generation:', voPlan);
+        toast.error('Could not generate PDF: Invalid VO plan.');
+        return;
+    }
+
+    const existingPdfBytes = await fetch(url).then(res => res.arrayBuffer());
+    const pdfDoc = await PDFDocument.load(existingPdfBytes);
+    pdfDoc.registerFontkit(fontkit.default);
+
+    const fontUrl = 'https://cdn.jsdelivr.net/npm/notosans-fontface@latest/fonts/NotoSans-Regular.ttf';
+    const fontBytes = await fetch(fontUrl).then(res => res.arrayBuffer());
+    const notoSansFont = await pdfDoc.embedFont(fontBytes);
+
+    const boldFontUrl = 'https://cdn.jsdelivr.net/npm/notosans-fontface@latest/fonts/NotoSans-Bold.ttf';
+    const boldFontBytes = await fetch(boldFontUrl).then(res => res.arrayBuffer());
+    const notoSansBoldFont = await pdfDoc.embedFont(boldFontBytes);
+    
+    const pages = pdfDoc.getPages();
+    const firstPage = pages[0];
+    const secondPage = pages[1];
+
+    if (agreementData.seatNumber) {
+      firstPage.drawText(String(agreementData.seatNumber), {
+        x: 425,
+        y: 304,
+        font: notoSansFont,
+        size: 12,
+        color: rgb(0, 0, 0),
+      });
+    }
+
+    // Draw 'LEGAL NAME (Second Party) on Agreement Date)'
+    if (agreementData.memberLegalName && agreementData.agreementDate) {
+        const legalName = agreementData.memberLegalName.toUpperCase();
+        const agreementDateStr = formatDate(agreementData.agreementDate);
+        const text1 = `${legalName} (Second Party) `;
+        const text2 = 'on ';
+        const text3 = `${agreementDateStr}`;
+
+        const x = 200;
+        const y = 664;
+        const size = 11;
+        const color = rgb(0, 0, 0);
+        
+        firstPage.drawText(text1, { x, y, font: notoSansBoldFont, size, color });
+        const text1Width = notoSansBoldFont.widthOfTextAtSize(text1, size);
+        
+        firstPage.drawText(text2, { x: x + text1Width, y, font: notoSansFont, size, color });
+        const text2Width = notoSansFont.widthOfTextAtSize(text2, size);
+
+        firstPage.drawText(text3, { x: x + text1Width + text2Width, y, font: notoSansBoldFont, size, color });
+    }
+
+    firstPage.drawText(formatDate(agreementData.startDate) || '', { x: 395, y: 514, font: notoSansFont, size: 11, color: rgb(0, 0, 0) });
+    firstPage.drawText(String(agreementData.agreementLength || ''), { x: 237, y: 484, font: notoSansFont, size: 10, color: rgb(0, 0, 0) });
+    firstPage.drawText(String(agreementData.agreementLength || ''), { x: 171, y: 499, font: notoSansFont, size: 10, color: rgb(0, 0, 0) });
+    firstPage.drawText(`(${agreementData.memberLegalName || ''})`, { x: 190, y: 85, font: notoSansBoldFont, size: 10, color: rgb(0, 0, 0) });
+    firstPage.drawText(`Agreement Number: ${agreementData.agreementNumber || ''}`, { x: 440, y: 840, font: notoSansBoldFont, size: 9, color: rgb(0, 0, 0) });
+
+
+    if(secondPage) {
+        secondPage.drawText(agreementData.authorizorName || '', { x: 105, y: 206, font: notoSansFont, size: 10, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.designation || '', { x: 105, y: 191, font: notoSansFont, size: 10, color: rgb(0, 0, 0) });
+        secondPage.drawText(formatDate(new Date()) || '', { x: 105, y: 176, font: notoSansFont, size: 10, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.clientAuthorizorName || '', { x: 105, y: 100, font: notoSansFont, size: 10, color: rgb(0, 0, 0) });
+        secondPage.drawText(agreementData.clientAuthorizorTitle || '', { x: 105, y: 85, font: notoSansFont, size: 10, color: rgb(0, 0, 0) });
+        secondPage.drawText(formatDate(new Date()) || '', { x: 105, y: 69, font: notoSansFont, size: 10, color: rgb(0, 0, 0) });
+
+    }
+
+    const pdfBytes = await pdfDoc.save();
+    let binary = '';
+    for (let i = 0; i < pdfBytes.length; i++) {
+      binary += String.fromCharCode(pdfBytes[i]);
+    }
+    return btoa(binary);
+  };
+  const handleEarlyExit = async () => {
+    if (!hasPermission('agreements:early_exit')) {
+      toast.error("You don't have permission to terminate agreements.");
+      return;
+    }
+    if (!selectedAgreement) return;
+    setIsExitModalOpen(true);
+  };
+
+  const handleEarlyExitConfirm = async (exitDate) => {
+    if (!selectedAgreement) return;
+    setIsExiting(true);
+    try {
+      const result = await earlyExitAgreementCallable({ agreementId: selectedAgreement.id, exitDate: exitDate });
+      toast.success(result.data.message);
+
+      // setAllAgreements(prev => 
+      //   prev.map(a => 
+      //       a.id === selectedAgreement.id 
+      //       ? { ...a, status: 'terminated', exitDate: exitDate, lastEditedAt: serverTimestamp() }
+      //       : a
+      //   )
+      // );
+      refreshData('agreements'); // Refresh agreements data in context after update
+      
+      logActivity(
+        db,
+        user,
+        'agreement_early_exit',
+        `Agreement "${selectedAgreement.agreementNumber}" for "${selectedAgreement.name}" was terminated early.`, 
+        { agreementId: selectedAgreement.id, agreementNumber: selectedAgreement.agreementNumber, memberName: selectedAgreement.name }
+      );
+      handleCloseModal();
+    } catch (error) {
+      console.error("Error performing early exit:", error);
+      toast.error(error.message || "Failed to perform early exit.");
+    } finally {
+      setIsExiting(false);
+      setIsExitModalOpen(false);
+    }
+  };
+
+  const handleSendAgreementEmail = async () => {
+    if (!hasPermission('agreements:edit')) {
+        toast.error("You don't have permission to send agreement emails.");
+        return;
+    }
+    if (!agreementGenerated || !agreementGenerated.convertedEmail || !agreementGenerated.name || !agreementGenerated.agreementNumber) {
+      toast.error("Missing agreement details to send email.");
+      return;
+    }
+
+    setIsSendingEmail(true);
+    try {
+      const pdfBase64 = isVirtualOfficeFlow 
+        ? await getVOPdfBase64(agreementGenerated, selectedVOPlan)
+        : await getAgreementPdfBase64(agreementGenerated);
+
+      if (!pdfBase64) return; // Stop if PDF generation failed
+
+      await sendAgreementEmailCallable({
+        toEmail: agreementGenerated.convertedEmail,
+        ccEmail: agreementGenerated.ccEmail,
+        clientName: agreementGenerated.name,
+        agreementName: agreementGenerated.agreementNumber,
+        pdfBase64: pdfBase64,
+      });
+      toast.success("Agreement email sent successfully!");
+      logActivity(
+        db,
+        user,
+        'agreement_emailed',
+        `Agreement "${agreementGenerated.agreementNumber}" for "${agreementGenerated.name}" was emailed to "${agreementGenerated.convertedEmail}".`,
+        { agreementId: agreementGenerated.id, agreementNumber: agreementGenerated.agreementNumber, memberName: agreementGenerated.name, email: agreementGenerated.convertedEmail }
+      );
+    } catch (error) {
+      console.error("Error sending agreement email:", error);
+      toast.error(error.message || "Failed to send agreement email.");
+    } finally {
+      setIsSendingEmail(false);
+    }
+  };
+
+  if (!hasPermission('agreements:view')) {
+    return (
+        <div className={styles.container}>
+            <div className={styles.content}>
+                <div className={styles.header}>
+                    <div className={styles.headerText}>
+                        <h1 className={styles.title}>Permission Denied</h1>
+                        <p className={styles.subtitle}>You do not have permission to view this page.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+  }
+
+  return (
+    <div className={styles.container}>
+      <div className={styles.content}>
+        <div className={styles.header}>
+          <div className={styles.headerText}>
+            <h1 className={styles.title}>Agreements</h1>
+            <p className={styles.subtitle}>Manage your client agreements and onboarding details.</p>
+          </div>
+        </div>
+
+        <Box sx={{ display: 'flex', flexDirection: { xs: 'column', sm: 'row' }, gap: 2, my: 3, alignItems: 'center' }}>
+          <TextField
+            placeholder="Search by name, email, or phone..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            size="small"
+            sx={{ width: { xs: '100%', sm: 'auto' }, flexGrow: { sm: 1 }, bgcolor: '#ffffff', '& .MuiOutlinedInput-root': { fontSize: '14px', '& fieldset': { borderColor: '#e0e0e0' }, '&:hover fieldset': { borderColor: '#2b7a8e' }, '&.Mui-focused fieldset': { borderColor: '#2b7a8e' } } }}
+            InputProps={{ startAdornment: (<InputAdornment position="start"><SearchIcon sx={{ color: '#9e9e9e', fontSize: '20px' }} /></InputAdornment>) }}
+          />
+          <Select
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            size="small"
+            sx={{ width: { xs: '100%', sm: 200 }, bgcolor: '#ffffff', fontSize: '14px', '& .MuiOutlinedInput-notchedOutline': { borderColor: '#e0e0e0' }, '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#2b7a8e' }, '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#2b7a8e' } }}
+          >
+            <MenuItem value="Active">Active Agreements</MenuItem>
+            <MenuItem value="Terminated">Terminated Agreements</MenuItem>
+          </Select>
+        </Box>
+
+        <div className={styles.tableCard}>
+          <table className={styles.table}>
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th className={styles.hideOnMobile}>Package</th>
+                <th className={styles.hideOnMobile}>Email</th>
+                <th className={styles.hideOnTablet}>Phone</th>
+                <th className={styles.hideOnMobile}>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading.agreements || refreshing.agreements ? ( // Use loading and refreshing state from context
+                <tr>
+                  <td colSpan="5" style={{ textAlign: 'center', padding: '20px' }}>
+                    <CircularProgress />
+                  </td>
+                </tr>
+              ) : displayedAgreements.length > 0 ? (
+                displayedAgreements.map((agreement) => (
+                  <tr 
+                    key={agreement.id} 
+                    onClick={() => handleRowClick(agreement)}
+                    className={hasPermission('agreements:view') ? styles.clickableRow : ''}
+                  >
+                    <td data-label="Name">
+                      <span className={styles.nameText}>{agreement.memberLegalName || agreement.name}</span>
+                    </td>
+                                        <td className={styles.hideOnMobile} data-label="Package">
+                                          {(() => {
+                                            const packageToDisplay = agreement.servicePackage || agreement.purposeOfVisit;
+                    
+                                            if (packageToDisplay === 'Virtual Office' && agreement.serviceAgreementType) {
+                                              const parts = agreement.serviceAgreementType.split(' - ');
+                                              const voPlan = (parts.length > 1 && ['Basic', 'Plus', 'Platinum'].includes(parts[1])) ? parts[1] : null;
+                                              
+                                              if (voPlan) {
+                                                return (
+                                                  <Box sx={{
+                                                    display: 'flex',
+                                                    flexDirection: 'column',
+                                                    alignItems: 'flex-start', // Default for desktop
+                                                    '@media (max-width: 767px)': {
+                                                      alignItems: 'flex-end',
+                                                    }
+                                                  }}>
+                                                    <Typography component="span" sx={{ fontSize: '14px', color: '#424242' }}>
+                                                      Virtual Office
+                                                    </Typography>
+                                                    <Typography component="span" sx={{ fontSize: '12px', color: '#757575' }}>
+                                                      {voPlan}
+                                                    </Typography>
+                                                  </Box>
+                                                );
+                                              }
+                                            }
+                                            // For all other packages, display the determined packageToDisplay
+                                            return packageToDisplay;
+                                          })()}
+                                        </td>                    <td className={styles.hideOnMobile} data-label="Email">{agreement.convertedEmail}</td>
+                    <td className={styles.hideOnTablet} data-label="Phone">{agreement.phone}</td>
+                    <td className={styles.hideOnMobile} data-label="Actions">
+                      <IconButton
+                        onClick={(e) => handleViewProfileClick(e, agreement.leadId)}
+                        onMouseEnter={() => prefetchClientProfile(agreement.leadId)}
+                        size="small"
+                        title="View Client Profile"
+                      >
+                        <Visibility />
+                      </IconButton>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan="5" style={{ textAlign: 'center', padding: '20px' }}>
+                    No agreements found.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+        <Typography sx={{ mt: 2, fontSize: '13px', color: '#757575' }}>
+          {`Showing ${displayedAgreements.length} of ${agreements.length} agreements`}
+        </Typography>
+      </div>
+
+      <Dialog 
+        open={isModalOpen} 
+        onClose={handleCloseModal}
+        maxWidth="md"
+        fullWidth
+        PaperProps={{
+          style: {
+            borderRadius: '12px',
+          }
+        }}
+      >
+        <DialogTitle style={{ 
+          display: 'flex', 
+          justifyContent: 'space-between', 
+          alignItems: 'center',
+          backgroundColor: '#f8fafc',
+          borderBottom: '1px solid #e2e8f0',
+          padding: '20px 24px'
+        }}>
+          <div>
+            <h2 style={{ margin: 0, color: '#1a4d5c', fontSize: '20px', fontWeight: 600 }}>
+              {agreementGenerated ? 'Agreement Updated' : 'Agreement Details'}
+            </h2>
+            <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '14px', fontWeight: 400 }}>
+              {agreementGenerated ? 'The agreement has been saved.' : (formData.memberLegalName || selectedAgreement?.name)}
+            </p>
+          </div>
+          <IconButton onClick={handleCloseModal} size="small" disabled={isSubmitting || isDeleting || isExiting || isSendingEmail}>
+            <Close />
+          </IconButton>
+        </DialogTitle>
+        
+        <DialogContent style={{ padding: '24px' }}>
+          {agreementGenerated ? (
+            <div style={{ textAlign: 'center', padding: '20px 0' }}>
+              <p style={{ margin: '4px 0 24px 0', color: '#64748b', fontSize: '14px', fontWeight: 400 }}>
+                You can now download the agreement or send it via email.
+              </p>
+              <div style={{ display: 'flex', justifyContent: 'center', gap: '12px' }}>
+                                  <Button
+                                  onClick={async () => {
+                                    try {
+                                      const pdfBase64 = isVirtualOfficeFlow 
+                                        ? await getVOPdfBase64(agreementGenerated, selectedVOPlan)
+                                        : await getAgreementPdfBase64(agreementGenerated);
+                
+                                      if (!pdfBase64) return;
+                                        
+                                      const byteCharacters = atob(pdfBase64);
+                                      const byteArray = Uint8Array.from(byteCharacters, char => char.charCodeAt(0));
+                                      const blob = new Blob([byteArray], { type: 'application/pdf' });
+                                      saveAs(blob, `${agreementGenerated.agreementNumber || 'agreement'}.pdf`);
+                                      toast.success("Agreement downloaded successfully!");
+                                      logActivity(
+                                        db,
+                                        user,
+                                        'agreement_downloaded_after_update',
+                                        `Agreement "${agreementGenerated.agreementNumber}" for "${agreementGenerated.memberLegalName || agreementGenerated.name}" was downloaded.`,
+                                        { agreementId: agreementGenerated.id, agreementNumber: agreementGenerated.agreementNumber, memberName: agreementGenerated.memberLegalName || agreementGenerated.name }
+                                      );
+                                    } catch (error) {
+                                      console.error("Error downloading agreement:", error);
+                                      toast.error("Failed to download agreement.");
+                                    }
+                                  }}
+                                  variant="contained"
+                                  style={{ backgroundColor: '#2b7a8e', color: 'white', textTransform: 'none', padding: '8px 24px' }}
+                                >
+                                  Download Agreement
+                                </Button>                <Button
+                  onClick={handleSendAgreementEmail}
+                  variant="outlined"
+                  style={{ color: '#64748b', borderColor: '#cbd5e1', textTransform: 'none', padding: '8px 24px' }}
+                  disabled={isSendingEmail}
+                >
+                  {isSendingEmail ? <CircularProgress size={24} /> : 'Send Email'}
+                </Button>
+              </div>
+            </div>
+          ) : isVirtualOfficeFlow ? (
+            !selectedVOPlan ? (
+              <div style={{ padding: '20px', textAlign: 'center' }}>
+                <h3 style={{ color: '#1a4d5c', fontSize: '18px', fontWeight: 600 }}>Select a Virtual Office Plan</h3>
+                <p style={{ margin: '4px 0 24px 0', color: '#64748b', fontSize: '14px' }}>
+                  For member: <strong>{selectedAgreement?.name}</strong>
+                </p>
+                <Box sx={{ display: 'flex', justifyContent: 'center', gap: 2, mt: 3 }}>
+                  <Button variant="outlined" onClick={() => setSelectedVOPlan('Basic')} sx={{ borderColor: '#2b7a8e', color: '#2b7a8e', '&:hover': { borderColor: '#1a4d5c', backgroundColor: '#f0f7f8' }}}>Basic</Button>
+                  <Button variant="outlined" onClick={() => setSelectedVOPlan('Plus')} sx={{ borderColor: '#2b7a8e', color: '#2b7a8e', '&:hover': { borderColor: '#1a4d5c', backgroundColor: '#f0f7f8' }}}>Plus</Button>
+                  <Button variant="outlined" onClick={() => setSelectedVOPlan('Platinum')} sx={{ borderColor: '#2b7a8e', color: '#2b7a8e', '&:hover': { borderColor: '#1a4d5c', backgroundColor: '#f0f7f8' }}}>Platinum</Button>
+                </Box>
+              </div>
+            ) : (
+              <LocalizationProvider dateAdapter={AdapterDayjs}>
+                <form onSubmit={handleSubmit}>
+                  <div className={styles.section}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '1rem' }}>
+                      <h3 className={styles.sectionTitle} style={{ margin: '0' }}>Member & Agreement Details</h3>
+                      <Select
+                        value={selectedVOPlan}
+                        onChange={(e) => setSelectedVOPlan(e.target.value)}
+                        size="small"
+                        disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'}
+                        sx={{ minWidth: 150 }}
+                      >
+                        <MenuItem value="Basic">Plan: Basic</MenuItem>
+                        <MenuItem value="Plus">Plan: Plus</MenuItem>
+                        <MenuItem value="Platinum">Plan: Platinum</MenuItem>
+                      </Select>
+                    </div>
+                    <div className={styles.formGrid}>
+                      <TextField label="Member Legal Name" name="memberLegalName" value={formData.memberLegalName} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                      <DatePicker label="Agreement Date" value={formData.agreementDate ? dayjs(formData.agreementDate) : null} onChange={(newValue) => handleDateChange('agreementDate', newValue)} format="DD/MM/YYYY" slotProps={{ textField: { fullWidth: true, variant: 'outlined', size: 'small' } }} disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                      <TextField label="Agreement Number" name="agreementNumber" value={formData.agreementNumber} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled />
+                      <DatePicker label="Start Date" value={formData.startDate ? dayjs(formData.startDate) : null} onChange={(newValue) => handleDateChange('startDate', newValue)} format="DD/MM/YYYY" slotProps={{ textField: { fullWidth: true, variant: 'outlined', size: 'small' } }} disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                      <TextField label="Length of Agreement" name="agreementLength" value={formData.agreementLength} onChange={handleInputChange} fullWidth variant="outlined" size="small" select disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'}>
+                        <MenuItem value={6}>6 months</MenuItem>
+                        <MenuItem value={11}>11 months</MenuItem>
+                      </TextField>
+                      <DatePicker label="End Date" value={formData.endDate ? dayjs(formData.endDate) : null} onChange={(newValue) => handleDateChange('endDate', newValue)} format="DD/MM/YYYY" slotProps={{ textField: { fullWidth: true, variant: 'outlined', size: 'small', disabled: true } }} />
+                      <TextField label="Seat Number" name="seatNumber" type="number" value={formData.seatNumber} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                    </div>
+                  </div>
+
+                  <div className={styles.section}>
+                    <h3 className={styles.sectionTitle}>Client Authorization Details</h3>
+                    <div className={styles.formGrid}>
+                      <TextField label="Name" name="clientAuthorizorName" value={formData.clientAuthorizorName} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                      <TextField label="Title" name="clientAuthorizorTitle" value={formData.clientAuthorizorTitle} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                    </div>
+                  </div>
+
+                  <div className={styles.section}>
+                    <h3 className={styles.sectionTitle}>Authorization Details</h3>
+                    <div className={styles.formGrid}>
+                      <TextField label="Authorizor Name" name="authorizorName" value={formData.authorizorName} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                      <TextField label="Designation" name="designation" value={formData.designation} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                    </div>
+                  </div>
+
+                  <div className={styles.modalActions}>
+                    {hasPermission('agreements:delete') && selectedAgreement?.status !== 'terminated' && ( <Button onClick={handleDeleteClick} variant="outlined" style={{ color: '#f44336', borderColor: '#f44336', textTransform: 'none', padding: '8px 24px', marginRight: '12px' }} disabled={isDeleting}>{isDeleting ? <CircularProgress size={24} /> : 'Delete'}</Button> )}
+                    {hasPermission('agreements:early_exit') && selectedAgreement?.status !== 'terminated' && ( <Button onClick={handleEarlyExit} variant="outlined" style={{ color: '#ff9800', borderColor: '#ff9800', textTransform: 'none', padding: '8px 24px', marginRight: 'auto' }} disabled={isExiting}>{isExiting ? <CircularProgress size={24} /> : 'Early Exit'}</Button> )}
+                    {selectedAgreement && (
+                      <Button
+                        onClick={async () => {
+                          try {
+                            const pdfBase64 = await getVOPdfBase64(formData, selectedVOPlan);
+                            if (!pdfBase64) return;
+                            const byteCharacters = atob(pdfBase64);
+                            const byteArray = Uint8Array.from(byteCharacters, char => char.charCodeAt(0));
+                            const blob = new Blob([byteArray], { type: 'application/pdf' });
+                            saveAs(blob, `${formData.agreementNumber || 'agreement'}.pdf`);
+                            toast.success("Agreement downloaded successfully!");
+                          } catch (error) {
+                            console.error("Error downloading agreement:", error);
+                            toast.error("Failed to download agreement.");
+                          }
+                        }}
+                        variant="outlined"
+                        style={{ color: '#2b7a8e', borderColor: '#2b7a8e', textTransform: 'none', padding: '8px 24px' }}
+                      >
+                        Download Current Agreement
+                      </Button>
+                    )}
+                     {selectedAgreement?.status !== 'terminated' && (
+                        <Button onClick={handleCloseModal} variant="outlined" style={{ color: '#64748b', borderColor: '#cbd5e1', textTransform: 'none', padding: '8px 24px' }} disabled={isSubmitting}>
+                        Cancel
+                        </Button>
+                      )}
+                      {hasPermission('agreements:edit') && selectedAgreement?.status !== 'terminated' && (
+                        <Button type="submit" variant="contained" style={{ backgroundColor: '#2b7a8e', color: 'white', textTransform: 'none', padding: '8px 24px' }} disabled={isSubmitting}>
+                          {isSubmitting ? <CircularProgress size={24} color="inherit" /> : 'Update Agreement'}
+                        </Button>
+                      )}
+                  </div>
+                </form>
+              </LocalizationProvider>
+            )
+          ) : (
+            <LocalizationProvider dateAdapter={AdapterDayjs}>
+            <form onSubmit={handleSubmit}>
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>Member Details</h3>
+                <div className={styles.formGrid}>
+                  <TextField label="Member Legal Name" name="memberLegalName" value={formData.memberLegalName} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Member CIN" name="memberCIN" value={formData.memberCIN} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Member GST Number" name="memberGST" value={formData.memberGST} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Member PAN" name="memberPAN" value={formData.memberPAN} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Member KYC" name="memberKYC" value={formData.memberKYC} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Member Address" name="memberAddress" value={formData.memberAddress} onChange={handleInputChange} fullWidth variant="outlined" size="small" multiline rows={2} style={{ gridColumn: '1 / -1' }} disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                </div>
+              </div>
+
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>Client Authorization Details</h3>
+                <div className={styles.formGrid}>
+                  <TextField label="Name" name="clientAuthorizorName" value={formData.clientAuthorizorName} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Title" name="clientAuthorizorTitle" value={formData.clientAuthorizorTitle} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                </div>
+              </div>
+
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>Agreement Information</h3>
+                <div className={styles.formGrid}>
+                <DatePicker label="Agreement Date" value={formData.agreementDate ? dayjs(formData.agreementDate) : null} onChange={(newValue) => handleDateChange('agreementDate', newValue)} format="DD/MM/YYYY" slotProps={{ textField: { fullWidth: true, variant: 'outlined', size: 'small' } }} disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Agreement Number" name="agreementNumber" value={formData.agreementNumber} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled />
+                  <DatePicker label="Start Date" value={formData.startDate ? dayjs(formData.startDate) : null} onChange={(newValue) => handleDateChange('startDate', newValue)} format="DD/MM/YYYY" slotProps={{ textField: { fullWidth: true, variant: 'outlined', size: 'small' } }} disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Length of Agreement" name="agreementLength" value={formData.agreementLength} onChange={handleInputChange} fullWidth variant="outlined" size="small" select disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'}>
+                    {[...Array(11).keys()].map((i) => ( <MenuItem key={i + 1} value={i + 1}> {i + 1} month(s) </MenuItem> ))}
+                  </TextField>
+                  <DatePicker label="End Date" value={formData.endDate ? dayjs(formData.endDate) : null} onChange={(newValue) => handleDateChange('endDate', newValue)} format="DD/MM/YYYY" slotProps={{ textField: { fullWidth: true, variant: 'outlined', size: 'small', disabled: true } }} disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Package" name="servicePackage_select" value={isOtherPackage ? 'Others' : formData.servicePackage} onChange={handleInputChange} fullWidth variant="outlined" size="small" select disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'}>
+                    <MenuItem value="">Select Package</MenuItem>
+                    <MenuItem value="Dedicated Desk">Dedicated Desk</MenuItem>
+                    <MenuItem value="Flexible Desk">Flexible Desk</MenuItem>
+                    <MenuItem value="Private Cabin">Private Cabin</MenuItem>
+                    <MenuItem value="Virtual Office">Virtual Office</MenuItem>
+                    <MenuItem value="Meeting Room">Meeting Room</MenuItem>
+                    <MenuItem value="Others">Others</MenuItem>
+                  </TextField>
+                  <TextField label="Quantity" name="serviceQuantity" type="number" value={formData.serviceQuantity} onChange={handleInputChange} fullWidth variant="outlined" size="small" InputProps={{ inputProps: { min: 1 } }} disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  {isOtherPackage && ( <TextField label="Other Package" name="servicePackage" value={formData.servicePackage} onChange={handleInputChange} fullWidth variant="outlined" size="small" style={{ gridColumn: '1 / -1' }} disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} /> )}
+                  <TextField label="Total Monthly Payment" name="totalMonthlyPayment" value={formData.totalMonthlyPayment} onChange={handleInputChange} fullWidth variant="outlined" size="small" type="number" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                </div>
+              </div>
+
+              <div className={styles.section}>
+                <h3 className={styles.sectionTitle}>Authorization Details</h3>
+                <div className={styles.formGrid}>
+                  <TextField label="Authorizor Name" name="authorizorName" value={formData.authorizorName} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Prepared By" name="preparedByNew" value={formData.preparedByNew} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                  <TextField label="Designation" name="designation" value={formData.designation} onChange={handleInputChange} fullWidth variant="outlined" size="small" disabled={!hasPermission('agreements:edit') || selectedAgreement?.status === 'terminated'} />
+                </div>
+              </div>
+
+              <div className={styles.modalActions}>
+                {hasPermission('agreements:delete') && selectedAgreement?.status !== 'terminated' && ( <Button onClick={handleDeleteClick} variant="outlined" style={{ color: '#f44336', borderColor: '#f44336', textTransform: 'none', padding: '8px 24px', marginRight: '12px' }} disabled={isDeleting}>{isDeleting ? <CircularProgress size={24} /> : 'Delete'}</Button> )}
+                {hasPermission('agreements:early_exit') && selectedAgreement?.status !== 'terminated' && ( <Button onClick={handleEarlyExit} variant="outlined" style={{ color: '#ff9800', borderColor: '#ff9800', textTransform: 'none', padding: '8px 24px', marginRight: 'auto' }} disabled={isExiting}>{isExiting ? <CircularProgress size={24} /> : 'Early Exit'}</Button> )}
+                {selectedAgreement && (
+                  <Button
+                    onClick={async () => {
+                      try {
+                        const pdfBase64 = isVirtualOfficeFlow
+                            ? await getVOPdfBase64(formData, selectedVOPlan)
+                            : await getAgreementPdfBase64({
+                              ...formData,
+                              serviceAgreementType: `${formData.servicePackage} - ${formData.serviceQuantity} nos`
+                            });
+
+                        if (!pdfBase64) return;
+
+                        const byteCharacters = atob(pdfBase64);
+                        const byteArray = Uint8Array.from(byteCharacters, char => char.charCodeAt(0));
+                        const blob = new Blob([byteArray], { type: 'application/pdf' });
+                        saveAs(blob, `${formData.agreementNumber || 'agreement'}.pdf`);
+                        toast.success("Agreement downloaded successfully!");
+                        logActivity(
+                          db,
+                          user,
+                          'agreement_downloaded',
+                          `Agreement "${formData.agreementNumber}" for "${formData.memberLegalName || selectedAgreement.name}" was downloaded.`,
+                          { agreementId: selectedAgreement.id, agreementNumber: formData.agreementNumber, memberName: formData.memberLegalName || selectedAgreement.name }
+                        );
+                      } catch (error) {
+                        console.error("Error downloading agreement:", error);
+                        toast.error("Failed to download agreement.");
+                      }
+                    }}
+                    variant="outlined"
+                    style={{ color: '#2b7a8e', borderColor: '#2b7a8e', textTransform: 'none', padding: '8px 24px' }}
+                  >
+                    Download Current Agreement
+                  </Button>
+                )}
+                {selectedAgreement?.status !== 'terminated' && (
+                <Button onClick={handleCloseModal} variant="outlined" style={{ color: '#64748b', borderColor: '#cbd5e1', textTransform: 'none', padding: '8px 24px' }} disabled={isSubmitting}>
+                  Cancel
+                </Button>
+                )}
+                {hasPermission('agreements:edit') && selectedAgreement?.status !== 'terminated' && (
+                  <Button type="submit" variant="contained" style={{ backgroundColor: '#2b7a8e', color: 'white', textTransform: 'none', padding: '8px 24px' }} disabled={isSubmitting}>
+                    {isSubmitting ? <CircularProgress size={24} color="inherit" /> : 'Update Agreement'}
+                  </Button>
+                )}
+              </div>
+            </form>
+            </LocalizationProvider>
+          )}
+        </DialogContent>
+      </Dialog>
+      {isExitModalOpen && (
+        <ExitDateModal
+          open={isExitModalOpen}
+          onClose={() => setIsExitModalOpen(false)}
+          onConfirm={handleEarlyExitConfirm}
+          memberName={selectedAgreement?.name}
+          isExiting={isExiting}
+        />
+      )}
+      <ClientProfileModal
+        open={isProfileModalOpen}
+        onClose={() => {
+          setIsProfileModalOpen(false);
+          setSelectedClientId(null);
+        }}
+        clientId={selectedClientId}
+      />
+    </div>
+  );
+}

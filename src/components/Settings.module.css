@@ -1,0 +1,262 @@
+.container {
+  flex: 1;
+  padding: 32px;
+  background-color: #f5f5f5;
+  overflow-y: auto;
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 24px;
+}
+
+.header h1 {
+  margin: 0 0 8px 0;
+  color: #1a4d5c;
+}
+
+.subtitle {
+  margin: 0;
+  color: #666;
+}
+
+.headerButtons {
+  display: flex;
+  gap: 12px;
+}
+
+.addButton {
+  background-color: #2b7a8e !important;
+  color: white !important;
+  text-transform: none !important;
+}
+
+.addButton:hover {
+  background-color: #1a4d5c !important;
+}
+
+.rolesSection {
+  background-color: white;
+  border-radius: 8px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  padding: 24px;
+}
+
+.rolesSection h2 {
+  margin: 0 0 16px 0;
+  color: #1a4d5c;
+  padding-bottom: 16px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.tableContainer {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table thead {
+  background-color: #1a4d5c;
+  color: white;
+}
+
+.table th {
+  padding: 16px;
+  text-align: left;
+  font-weight: 600;
+}
+
+.table td {
+  padding: 16px;
+  border-bottom: 1px solid #e0e0e0;
+  vertical-align: middle;
+}
+
+.table tbody tr:hover {
+  background-color: #f9f9f9;
+}
+
+.table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+}
+
+.editButton {
+  color: #2b7a8e !important;
+}
+
+.editButton:hover {
+  background-color: #e3f2f7 !important;
+}
+
+.deleteButton {
+  color: #d32f2f !important;
+}
+
+.deleteButton:hover {
+  background-color: #ffebee !important;
+}
+
+.permissionChipsContainer {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  max-width: 400px;
+}
+
+.permissionsGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 0.5rem;
+  margin-top: 1rem;
+  background-color: #fdfdfd;
+  border: 1px solid #f0f0f0;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.closeButton {
+  position: absolute !important;
+  right: 16px;
+  top: 16px;
+  color: #666 !important;
+}
+
+.modalActions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 8px 0;
+}
+
+.saveButton {
+  background-color: #2b7a8e !important;
+  color: white !important;
+  text-transform: none !important;
+}
+
+.saveButton:hover {
+  background-color: #1a4d5c !important;
+}
+
+.templateEditor {
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+
+.templateEditor h3 {
+    margin: 0 0 16px 0;
+    color: #1a4d5c;
+}
+
+.editButton:disabled,
+.deleteButton:disabled {
+  color: rgba(0, 0, 0, 0.26) !important;
+  background-color: transparent !important;
+  cursor: not-allowed;
+}
+
+
+/* --- Responsive Styles --- */
+
+/* Utility class to hide elements on mobile */
+.hideOnMobile {
+  /* This class will be used in JSX, but needs media query context below */
+}
+
+@media (max-width: 845px) {
+  .container {
+    padding: 16px;
+  }
+
+  .header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 16px;
+  }
+
+  .headerButtons {
+    flex-direction: column;
+  }
+  
+  .rolesSection {
+    padding: 16px;
+  }
+
+  .permissionsGrid {
+    grid-template-columns: 1fr;
+  }
+  
+  /* Responsive Table Styles */
+  .table thead {
+    display: none; /* Hide table headers on mobile */
+  }
+
+  .table tr {
+    display: block;
+    margin-bottom: 16px;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+  }
+
+  .table td {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    text-align: right;
+    border-bottom: 1px solid #f0f0f0;
+  }
+  
+  .table td:last-child {
+      border-bottom: none;
+  }
+
+  .table td::before {
+    content: attr(data-label);
+    font-weight: bold;
+    text-align: left;
+    margin-right: 16px;
+    color: #1a4d5c;
+  }
+  
+  .permissionChipsContainer {
+    justify-content: flex-end;
+    max-width: 220px; /* Adjust for smaller screens */
+  }
+
+  .actions {
+      justify-content: flex-end;
+  }
+  
+  .hideOnMobile {
+    display: none !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .container {
+    padding: 12px;
+  }
+
+  .rolesSection {
+    padding: 12px;
+  }
+
+  .table td {
+    padding: 10px;
+  }
+}

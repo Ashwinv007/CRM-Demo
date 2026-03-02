@@ -1,0 +1,633 @@
+import React, { useState, useMemo, useContext, useEffect } from 'react';
+import { FirebaseContext } from '../store/Context';
+import { collection, addDoc, doc, updateDoc, getDoc, deleteDoc, serverTimestamp, getDocs, query, orderBy, limit, startAfter } from 'firebase/firestore';
+import { logActivity } from '../utils/logActivity';
+import styles from './MembersPage.module.css';
+import {
+  Box,
+  Typography,
+  TextField,
+  Button,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  Paper,
+  InputAdornment,
+  Chip,
+  MenuItem,
+  Select,
+  IconButton,
+  CircularProgress,
+  useMediaQuery,
+} from '@mui/material';
+import SearchIcon from '@mui/icons-material/Search';
+import FilterListIcon from '@mui/icons-material/FilterList';
+import AddIcon from '@mui/icons-material/Add';
+import UploadFile from '@mui/icons-material/UploadFile';
+import MemberModal from './MemberModal';
+import ExitDateModal from './ExitDateModal';
+import { KeyboardArrowDown, KeyboardArrowRight } from '@mui/icons-material';
+import { toast } from 'sonner';
+import { useNavigate } from 'react-router-dom';
+import { usePermissions } from '../auth/usePermissions';
+import { AuthContext } from '../store/Context';
+import { useData } from '../store/DataContext'; // Import useData
+
+// Helper function to format birthday for display
+const formatBirthdayDisplay = (day, month) => {
+  if (!day || !month) return '-';
+
+  const monthNamesFull = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  const dayNum = parseInt(day, 10);
+  const monthNum = parseInt(month, 10);
+
+  if (isNaN(dayNum) || isNaN(monthNum) || dayNum < 1 || dayNum > 31 || monthNum < 1 || monthNum > 12) {
+    return '-';
+  }
+
+  let suffix = 'th';
+  if (dayNum === 1 || dayNum === 21 || dayNum === 31) {
+    suffix = 'st';
+  } else if (dayNum === 2 || dayNum === 22) {
+    suffix = 'nd';
+  } else if (dayNum === 3 || dayNum === 23) {
+    suffix = 'rd';
+  }
+
+  return `${dayNum}${suffix} ${monthNamesFull[monthNum - 1]}`;
+};
+
+export default function MembersPage() {
+  const { db } = useContext(FirebaseContext); // Get db from FirebaseContext
+  const { user } = useContext(AuthContext);
+  const { members, loading, refreshing, refreshData } = useData(); // Use members, loading, refreshing, refreshData from DataContext
+  const { hasPermission } = usePermissions();
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [packageFilter, setPackageFilter] = useState('All Packages');
+  const [primaryMemberFilter, setPrimaryMemberFilter] = useState('All Members');
+  const [birthdayMonthFilter, setBirthdayMonthFilter] = useState('All Months');
+  const [modalOpen, setModalOpen] = useState(false);
+  const [editingMember, setEditingMember] = useState(null);
+  const [primaryMemberId, setPrimaryMemberId] = useState(null);
+  const [expandedRows, setExpandedRows] = useState({});
+  const [initialModalAction, setInitialModalAction] = useState(null);
+  const [isExitModalOpen, setIsExitModalOpen] = useState(false);
+  const [memberToRemove, setMemberToRemove] = useState(null);
+  // Removed refreshTrigger
+  const [isSaving, setIsSaving] = useState(false);
+  const [isRemoving, setIsRemoving] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
+  // Removed isLoading, totalMembersCount, allMembersFetched states
+
+  const navigate = useNavigate();
+  const isMobile = useMediaQuery('(max-width:825px)');
+
+  useEffect(() => {
+    if (isMobile) {
+      setPrimaryMemberFilter('All Members');
+    }
+  }, [isMobile]);
+
+  // Removed useEffect for fetching members, now handled by DataContext
+
+  useEffect(() => {
+    if (primaryMemberFilter === 'Primary Members' && searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      const newExpandedRows = {};
+
+      const subMembersMatching = members.filter(m => 
+        !m.primary && m.primaryMemberId && (
+          (m.name && m.name.toLowerCase().includes(query)) ||
+          (m.email && m.email.toLowerCase().includes(query)) ||
+          (m.whatsapp && m.whatsapp.toLowerCase().includes(query)) ||
+          (m.company && m.company.toLowerCase().includes(query))
+        )
+      );
+
+      subMembersMatching.forEach(subMember => {
+        newExpandedRows[subMember.primaryMemberId] = true;
+      });
+      
+      setExpandedRows(newExpandedRows);
+    } else if (!searchQuery.trim()) {
+      setExpandedRows({});
+    }
+  }, [searchQuery, primaryMemberFilter, members]);
+
+  const handleOpenAddModal = (primaryId = null) => {
+    if (!hasPermission('members:add')) {
+        toast.error("You don't have permission to add members.");
+        return;
+    }
+    setEditingMember(null);
+    setPrimaryMemberId(primaryId);
+    setModalOpen(true);
+  };
+
+  const handleOpenEditModal = (member) => {
+    if (!hasPermission('members:edit')) {
+        toast.error("You don't have permission to edit members.");
+        return;
+    }
+    setEditingMember(member);
+    setPrimaryMemberId(member.primaryMemberId || null);
+    setModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setModalOpen(false);
+    setEditingMember(null);
+    setPrimaryMemberId(null);
+    setInitialModalAction(null);
+  };
+
+  const handleSaveMember = async (memberData) => {
+    const isEditing = !!editingMember;
+
+    if (isEditing ? !hasPermission('members:edit') : !hasPermission('members:add')) {
+        toast.error(`You don't have permission to ${isEditing ? 'edit' : 'add'} members.`);
+        handleCloseModal();
+        return;
+    }
+
+    setIsSaving(true);
+    try {
+        if (initialModalAction === 'removeAndReplace') {
+            logActivity(db, user, 'member_replaced', `Primary member "${editingMember?.name}" was replaced by "${memberData.name}".`, { oldMemberId: editingMember?.id, newMemberName: memberData.name, newMemberId: memberData.id || 'N/A' });
+            toast.success("Primary member replaced successfully!");
+        } else if (isEditing) {
+            const memberDoc = doc(db, "members", editingMember.id);
+            await updateDoc(memberDoc, memberData);
+            toast.success("Member updated successfully!");
+            logActivity(db, user, 'member_edited', `Member "${memberData.name}" was updated.`, { memberId: editingMember.id, memberName: memberData.name });
+        } else {
+            const docRef = await addDoc(collection(db, "members"), memberData);
+            if (primaryMemberId) {
+                const primaryMemberDocRef = doc(db, "members", primaryMemberId);
+                const primaryMemberDoc = await getDoc(primaryMemberDocRef);
+                if (primaryMemberDoc.exists()) {
+                    const primaryData = primaryMemberDoc.data();
+                    const subMembers = primaryData.subMembers || [];
+                    await updateDoc(primaryMemberDocRef, { subMembers: [...subMembers, docRef.id] });
+                }
+            }
+            toast.success("Member added successfully!");
+            logActivity(db, user, 'member_created', `New member "${memberData.name}" was added.`, { memberId: docRef.id, memberName: memberData.name });
+        }
+        refreshData('members'); // Refresh members data in context
+    } catch (error) {
+        console.error("Error saving member: ", error);
+        toast.error(`Failed to ${isEditing ? 'update' : 'add'} member.`);
+    } finally {
+        setIsSaving(false);
+        handleCloseModal();
+    }
+  };
+
+  const handleRemoveConfirm = async (exitDate) => {
+    if (!memberToRemove) return;
+    setIsRemoving(true);
+    const memberId = memberToRemove.id;
+    try {
+      const memberDocRef = doc(db, "members", memberId);
+      const memberDoc = await getDoc(memberDocRef);
+
+      if (memberDoc.exists()) {
+        const memberData = memberDoc.data();
+        await addDoc(collection(db, "past_members"), { ...memberData, removedAt: exitDate });
+
+        // Fetch all members to find and update subMembers arrays
+        const allMembersSnapshot = await getDocs(collection(db, "members"));
+        for (const d of allMembersSnapshot.docs) {
+          const data = d.data();
+          if (data.subMembers && data.subMembers.includes(memberId)) {
+            const updatedSubMembers = data.subMembers.filter(id => id !== memberId);
+            await updateDoc(d.ref, { subMembers: updatedSubMembers });
+          }
+        }
+        
+        await deleteDoc(doc(db, "members", memberId));
+        refreshData('members'); // Refresh members data in context
+        refreshData('pastMembers'); // Refresh pastMembers data in context
+        toast.success("Member moved to Past Members successfully!");
+        logActivity(
+          db,
+          user,
+          'member_removed',
+          `Member "${memberData.name}" was removed and moved to Past Members.`,
+          { memberId: memberId, memberName: memberData.name }
+        );
+      } else {
+        toast.error("Member not found.");
+      }
+    } catch (error) {
+      console.error("Error removing member: ", error);
+      toast.error("Failed to remove member.");
+    } finally {
+      setIsRemoving(false);
+      setIsExitModalOpen(false);
+      setMemberToRemove(null);
+    }
+  };
+
+  const handleRemoveClick = (member) => {
+    if (member.primary) {
+        if (!hasPermission('members:edit')) {
+            toast.error("You don't have permission to replace members.");
+            return;
+        }
+        setEditingMember(member);
+        setInitialModalAction('removeAndReplace');
+        setModalOpen(true);
+    } else {
+        if (!hasPermission('members:delete')) {
+            toast.error("You don't have permission to delete members.");
+            return;
+        }
+        setMemberToRemove(member);
+        setIsExitModalOpen(true);
+    }
+  };
+
+  const filteredMembers = useMemo(() => {
+    let currentMembers = members; // Use members from context
+    const query = searchQuery.toLowerCase().trim();
+    const hasSearch = query.length > 0;
+
+    const isMatch = (member) =>
+      (member.name && member.name.toLowerCase().includes(query)) ||
+      (member.email && member.email.toLowerCase().includes(query)) ||
+      (member.whatsapp && member.whatsapp.toLowerCase().includes(query)) ||
+      (member.company && member.company.toLowerCase().includes(query));
+
+    if (primaryMemberFilter === 'Primary Members') {
+      if (hasSearch) {
+        const matchingMembers = currentMembers.filter(isMatch);
+        const primaryIdsToShow = new Set();
+        matchingMembers.forEach(m => {
+          if (m.primary) primaryIdsToShow.add(m.id);
+          else if (m.primaryMemberId) primaryIdsToShow.add(m.primaryMemberId);
+        });
+        
+        currentMembers = currentMembers.filter(m => m.primary && primaryIdsToShow.has(m.id));
+      } else {
+        currentMembers = currentMembers.filter(m => m.primary);
+      }
+    } else { // All Members
+      if (hasSearch) {
+        currentMembers = currentMembers.filter(isMatch);
+      }
+    }
+    
+    if (packageFilter !== 'All Packages') {
+      currentMembers = currentMembers.filter((member) => member.package === packageFilter);
+    }
+
+    if (birthdayMonthFilter !== 'All Months') {
+      currentMembers = currentMembers.filter((member) => member.birthdayMonth === birthdayMonthFilter);
+    }
+
+    if (primaryMemberFilter === 'All Members') {
+      currentMembers.sort((a, b) => {
+        const getGroupId = (m) => m.primaryMemberId || m.id;
+        const aGroupId = getGroupId(a);
+        const bGroupId = getGroupId(b);
+
+        if (aGroupId < bGroupId) return -1;
+        if (aGroupId > bGroupId) return 1;
+
+        // If in the same group, primary member should come first.
+        if (a.primary) return -1;
+        if (b.primary) return 1;
+        
+        // if both are sub-members, sort by name
+        return (a.name || '').localeCompare(b.name || '');
+      });
+    } else {
+      currentMembers.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    }
+    
+    return currentMembers;
+  }, [searchQuery, packageFilter, primaryMemberFilter, birthdayMonthFilter, members]);
+
+  const getSubMembers = (member) => {
+    if (!member.subMembers || member.subMembers.length === 0) return [];
+    
+    let subMembers = member.subMembers
+      .map(subId => members.find(m => m.id === subId)) // Use members from context
+      .filter(Boolean);
+
+    const query = searchQuery.toLowerCase().trim();
+    const hasSearch = query.length > 0;
+
+    if (primaryMemberFilter === 'Primary Members' && hasSearch) {
+        const isMatch = (m) =>
+            (m.name && m.name.toLowerCase().includes(query)) ||
+            (m.email && m.email.toLowerCase().includes(query)) ||
+            (m.whatsapp && m.whatsapp.toLowerCase().includes(query)) ||
+            (m.company && m.company.toLowerCase().includes(query));
+        
+        const primaryMatches = isMatch(member);
+        const matchingSubMembers = subMembers.filter(isMatch);
+
+        if (!primaryMatches && matchingSubMembers.length > 0) {
+            return matchingSubMembers;
+        }
+    }
+    
+    return subMembers;
+  };
+
+  const handleExport = async () => {
+    if (!hasPermission('members:export')) {
+        toast.error("You don't have permission to export members.");
+        return;
+    }
+    setIsExporting(true);
+    try {
+        const XLSX = await import('xlsx');
+        const dataToExport = filteredMembers.map(member => ({
+          Name: member.name,
+          Package: member.package,
+          Company: member.company,
+          Birthday: formatBirthdayDisplay(member.birthdayDay, member.birthdayMonth),
+          WhatsApp: member.whatsapp,
+          Email: member.email,
+          Primary: member.primary ? 'Yes' : 'No',
+        }));
+
+        const ws = XLSX.utils.json_to_sheet(dataToExport);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Members");
+        XLSX.writeFile(wb, "members.xlsx");
+        logActivity(
+            db,
+            user,
+            'members_exported',
+            `Exported ${dataToExport.length} members.`,
+            {
+                count: dataToExport.length,
+                filters: {
+                    package: packageFilter,
+                    primaryMember: primaryMemberFilter,
+                    birthdayMonth: birthdayMonthFilter,
+                    search: searchQuery
+                }
+            }
+        );
+    } catch (error) {
+        console.error("Error exporting members:", error);
+        toast.error("Failed to export members.");
+    } finally {
+        setIsExporting(false);
+    }
+  };
+
+  const renderAllMembersView = () => (
+    filteredMembers.map((member) => (
+      <TableRow key={member.id} sx={{ '&:hover': { backgroundColor: '#f5f5f5' }, cursor: 'pointer' }} onClick={() => handleOpenEditModal(member)}>
+        <TableCell sx={{ width: '40px' }} />
+        <TableCell data-label="Name" component="th" scope="row">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {member.name}
+          </Box>
+        </TableCell>
+        <TableCell data-label="Package">{member.package}</TableCell>
+        <TableCell data-label="Company" className={styles.hideOnTablet}>{member.clientType === 'individual' && !member.company ? 'N/A' : member.company}</TableCell>
+        <TableCell data-label="Birthday" className={styles.hideOnTablet}>{formatBirthdayDisplay(member.birthdayDay, member.birthdayMonth)}</TableCell>
+        <TableCell data-label="WhatsApp" className={styles.hideOnTablet}>{member.whatsapp}</TableCell>
+        <TableCell data-label="Email">{member.email}</TableCell>
+        <TableCell data-label="Actions" colSpan={2}>
+            {hasPermission('members:delete') && <Button size="small" color="error" onClick={(e) => { e.stopPropagation(); handleRemoveClick(member); }}>Remove</Button>}
+        </TableCell>
+      </TableRow>
+    ))
+  );
+
+  const renderPrimaryMembersView = () => (
+    filteredMembers.map((member) => {
+      const subMembers = getSubMembers(member);
+      const isExpanded = expandedRows[member.id];
+      return (
+        <React.Fragment key={member.id}>
+          <TableRow sx={{ '& > *': { borderBottom: 'unset' }, '&:hover': { backgroundColor: '#f5f5f5' }, cursor: 'pointer' }}>
+            <TableCell sx={{ width: '40px' }}>
+              {subMembers.length > 0 && (
+                <IconButton aria-label="expand row" size="small" onClick={(e) => { e.stopPropagation(); setExpandedRows((prev) => ({ ...prev, [member.id]: !prev[member.id] })); }}>
+                  {isExpanded ? <KeyboardArrowDown fontSize="small" /> : <KeyboardArrowRight fontSize="small" />}
+                </IconButton>
+              )}
+            </TableCell>
+            <TableCell data-label="Name" component="th" scope="row" onClick={() => handleOpenEditModal(member)}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                {member.name}
+              </Box>
+            </TableCell>
+            <TableCell data-label="Package" onClick={() => handleOpenEditModal(member)}>{member.package}</TableCell>
+            <TableCell data-label="Company" className={styles.hideOnTablet} onClick={() => handleOpenEditModal(member)}>{member.clientType === 'individual' && !member.company ? 'N/A' : member.company}</TableCell>
+            <TableCell data-label="Birthday" className={styles.hideOnTablet} onClick={() => handleOpenEditModal(member)}>{formatBirthdayDisplay(member.birthdayDay, member.birthdayMonth)}</TableCell>
+            <TableCell data-label="WhatsApp" className={styles.hideOnTablet} onClick={() => handleOpenEditModal(member)}>{member.whatsapp}</TableCell>
+            <TableCell data-label="Email" onClick={() => handleOpenEditModal(member)}>{member.email}</TableCell>
+            <TableCell data-label="Add Sub-member">
+              {hasPermission('members:add') && <IconButton onClick={(e) => { e.stopPropagation(); handleOpenAddModal(member.id); }} title="Add sub-member" sx={{ color: '#2b7a8e' }}>
+                <AddIcon />
+              </IconButton>}
+            </TableCell>
+            <TableCell data-label="Actions">
+              {hasPermission('members:delete') && <Button color="error" onClick={(e) => { e.stopPropagation(); handleRemoveClick(member); }}>Remove</Button>}
+            </TableCell>
+          </TableRow>
+          {isExpanded && subMembers.map((subMember) => (
+            <TableRow key={subMember.id} sx={{ backgroundColor: '#f8fafc', '&:hover': { backgroundColor: '#f1f5f9' }, cursor: 'pointer' }} onClick={() => handleOpenEditModal(subMember)}>
+              <TableCell />
+              <TableCell data-label="Name" component="th" scope="row">
+                <Box sx={{ display: 'flex', alignItems: 'center' }}>
+                  <Typography component="span" sx={{ fontFamily: 'monospace', mr: 1, color: 'grey.500' }}>└─</Typography>
+                  {subMember.name}
+                </Box>
+              </TableCell>
+              <TableCell data-label="Package">{subMember.package}</TableCell>
+              <TableCell data-label="Company" className={styles.hideOnTablet}>{subMember.clientType === 'individual' && !subMember.company ? 'N/A' : subMember.company}</TableCell>
+              <TableCell data-label="Birthday" className={styles.hideOnTablet}>{formatBirthdayDisplay(subMember.birthdayDay, subMember.birthdayMonth)}</TableCell>
+              <TableCell data-label="WhatsApp" className={styles.hideOnTablet}>{subMember.whatsapp}</TableCell>
+              <TableCell data-label="Email">{subMember.email}</TableCell>
+              <TableCell data-label="Actions" colSpan={3}>
+                {hasPermission('members:delete') && <Button size="small" color="error" onClick={(e) => { e.stopPropagation(); handleRemoveClick(subMember); }}>Remove</Button>}
+              </TableCell>
+            </TableRow>
+          ))}
+        </React.Fragment>
+      );
+    })
+  );
+
+  return (
+    <Box sx={{ flex: 1, bgcolor: '#fafafa', minHeight: '100vh', overflow: 'auto' }}>
+      <Box sx={{ p: '32px 40px', bgcolor: '#ffffff', borderBottom: '1px solid #e0e0e0' }}>
+        <Typography sx={{ fontSize: '28px', fontWeight: 600, color: '#1a4d5c', mb: 0.5 }}>
+          Members
+        </Typography>
+        <Typography sx={{ fontSize: '14px', color: '#2b7a8e' }}>
+          Manage your coworking space members and their roles.
+        </Typography>
+      </Box>
+
+      <Box sx={{ p: '32px 40px' }}>
+        <Box sx={{ display: 'flex', gap: 2, mb: 3, alignItems: 'center', flexWrap: 'wrap' }}>
+          <TextField
+            placeholder="Search members by name, email, or phone..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            size="small"
+            sx={{ flex: 1, minWidth: '200px', bgcolor: '#ffffff', '& .MuiOutlinedInput-root': { fontSize: '14px', '& fieldset': { borderColor: '#e0e0e0' }, '&:hover fieldset': { borderColor: '#2b7a8e' }, '&.Mui-focused fieldset': { borderColor: '#2b7a8e' } } }}
+            InputProps={{ startAdornment: (<InputAdornment position="start"><SearchIcon sx={{ color: '#9e9e9e', fontSize: '20px' }} /></InputAdornment>) }}
+          />
+          <Button
+            variant="outlined"
+            startIcon={<FilterListIcon />}
+            onClick={() => {
+              setSearchQuery('');
+              setPackageFilter('All Packages');
+              setPrimaryMemberFilter('All Members');
+              setBirthdayMonthFilter('All Months');
+            }}
+            sx={{ textTransform: 'none', fontSize: '14px', color: '#424242', borderColor: '#e0e0e0', bgcolor: '#ffffff', px: 2, '&:hover': { borderColor: '#2b7a8e', bgcolor: '#ffffff' } }}
+          >
+            Clear
+          </Button>
+          <Select
+            value={packageFilter}
+            onChange={(e) => setPackageFilter(e.target.value)}
+            size="small"
+            sx={{ minWidth: '150px', bgcolor: '#ffffff', fontSize: '14px', '& .MuiOutlinedInput-notchedOutline': { borderColor: '#e0e0e0' }, '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#2b7a8e' }, '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#2b7a8e' } }}
+          >
+            <MenuItem value="All Packages">All Packages</MenuItem>
+            <MenuItem value="Dedicated Desk">Dedicated Desk</MenuItem>
+            <MenuItem value="Flexible Desk">Flexible Desk</MenuItem>
+            <MenuItem value="Private Cabin">Private Cabin</MenuItem>
+            <MenuItem value="Virtual Office">Virtual Office</MenuItem>
+            <MenuItem value="Meeting Room">Meeting Room</MenuItem>
+          </Select>
+          <Select
+            value={primaryMemberFilter}
+            onChange={(e) => setPrimaryMemberFilter(e.target.value)}
+            size="small"
+            disabled={isMobile}
+            sx={{ minWidth: '150px', bgcolor: '#ffffff', fontSize: '14px', '& .MuiOutlinedInput-notchedOutline': { borderColor: '#e0e0e0' }, '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#2b7a8e' }, '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#2b7a8e' } }}
+          >
+            <MenuItem value="All Members">All Members</MenuItem>
+            <MenuItem value="Primary Members">Primary Members</MenuItem>
+          </Select>
+          <Select
+            value={birthdayMonthFilter}
+            onChange={(e) => setBirthdayMonthFilter(e.target.value)}
+            size="small"
+            sx={{ minWidth: '150px', bgcolor: '#ffffff', fontSize: '14px', '& .MuiOutlinedInput-notchedOutline': { borderColor: '#e0e0e0' }, '&:hover .MuiOutlinedInput-notchedOutline': { borderColor: '#2b7a8e' }, '&.Mui-focused .MuiOutlinedInput-notchedOutline': { borderColor: '#2b7a8e' } }}
+          >
+            <MenuItem value="All Months">All Months</MenuItem>
+            <MenuItem value="1">January</MenuItem>
+            <MenuItem value="2">February</MenuItem>
+            <MenuItem value="3">March</MenuItem>
+            <MenuItem value="4">April</MenuItem>
+            <MenuItem value="5">May</MenuItem>
+            <MenuItem value="6">June</MenuItem>
+            <MenuItem value="7">July</MenuItem>
+            <MenuItem value="8">August</MenuItem>
+            <MenuItem value="9">September</MenuItem>
+            <MenuItem value="10">October</MenuItem>
+            <MenuItem value="11">November</MenuItem>
+            <MenuItem value="12">December</MenuItem>
+          </Select>
+            {hasPermission('members:export') && <Button
+                variant="contained"
+                startIcon={isExporting ? <CircularProgress size={20} color="inherit" /> : <UploadFile />}
+                sx={{ textTransform: 'none', fontSize: '14px', bgcolor: '#2b7a8e', px: 3, boxShadow: 'none', '&:hover': { bgcolor: '#1a4d5c', boxShadow: 'none' } }}
+                onClick={handleExport}
+                disabled={isExporting}
+            >
+                {isExporting ? 'Exporting...' : 'Export'}
+            </Button>}
+            {/* {hasPermission('members:add') && <Button
+                variant="contained"
+                startIcon={<AddIcon />}
+                sx={{ textTransform: 'none', fontSize: '14px', bgcolor: '#2b7a8e', px: 3, boxShadow: 'none', '&:hover': { bgcolor: '#1a4d5c', boxShadow: 'none' } }}
+                onClick={() => handleOpenAddModal()}
+            >
+                Add Member
+            </Button>} */}
+        </Box>
+
+        <TableContainer component={Paper} className={styles.tableContainer} sx={{ boxShadow: 'none', border: '1px solid #e0e0e0', borderRadius: '8px' }}>
+          <Table className={styles.table}>
+            <TableHead>
+              <TableRow sx={{ bgcolor: '#fafafa' }}>
+                <TableCell />
+                <TableCell sx={{ fontSize: '13px', fontWeight: 600, color: '#424242', borderBottom: '1px solid #e0e0e0', py: 2 }}>Name</TableCell>
+                <TableCell sx={{ fontSize: '13px', fontWeight: 600, color: '#424242', borderBottom: '1px solid #e0e0e0' }}>Package</TableCell>
+                <TableCell className={styles.hideOnTablet} sx={{ fontSize: '13px', fontWeight: 600, color: '#424242', borderBottom: '1px solid #e0e0e0' }}>Company</TableCell>
+                <TableCell className={styles.hideOnTablet} sx={{ fontSize: '13px', fontWeight: 600, color: '#424242', borderBottom: '1px solid #e0e0e0' }}>Birthday</TableCell>
+                <TableCell className={styles.hideOnTablet} sx={{ fontSize: '13px', fontWeight: 600, color: '#424242', borderBottom: '1px solid #e0e0e0' }}>WhatsApp</TableCell>
+                <TableCell sx={{ fontSize: '13px', fontWeight: 600, color: '#424242', borderBottom: '1px solid #e0e0e0' }}>Email</TableCell>
+                <TableCell />
+                <TableCell>Actions</TableCell>
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {loading.members || refreshing.members ? ( // Use loading and refreshing state from context
+                <TableRow>
+                  <TableCell colSpan={9} sx={{ textAlign: 'center', py: 4 }}>
+                    <CircularProgress />
+                  </TableCell>
+                </TableRow>
+              ) : primaryMemberFilter === 'Primary Members' ? (
+                renderPrimaryMembersView()
+              ) : (
+                renderAllMembersView()
+              )}
+              {!loading.members && !refreshing.members && filteredMembers.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={9} sx={{ textAlign: 'center', py: 4, fontSize: '14px', color: '#757575' }}>
+                    No members found matching your filters
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </TableContainer>
+
+        <Typography sx={{ mt: 2, fontSize: '13px', color: '#757575' }}>
+          {`Showing ${filteredMembers.length} of ${members.length} members`}
+        </Typography>
+      </Box>
+
+      {modalOpen && (
+        <MemberModal
+          open={modalOpen}
+          onClose={handleCloseModal}
+          editMember={editingMember}
+          onSave={handleSaveMember}
+          primaryMemberId={primaryMemberId}
+          initialAction={initialModalAction}
+          isSaving={isSaving}
+        />
+      )}
+      {isExitModalOpen && (
+        <ExitDateModal
+            open={isExitModalOpen}
+            onClose={() => setIsExitModalOpen(false)}
+            onConfirm={handleRemoveConfirm}
+            memberName={memberToRemove?.name}
+            isRemoving={isRemoving}
+        />
+      )}
+    </Box>
+  );
+}

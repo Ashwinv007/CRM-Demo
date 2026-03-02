@@ -1,0 +1,415 @@
+openapi: 3.0.3
+info:
+  title: Trial Bench CRM API
+  description: |
+    Firebase Cloud Functions API for Trial Bench CRM.
+    All endpoints are Firebase `onCall` callable functions invoked via the Firebase SDK,
+    except for triggers and scheduled functions.
+    
+    **Authentication**: All callable functions require a valid Firebase Auth token.
+    Permission checks use RBAC via custom claims (`token.role`).
+  version: 1.0.0
+  contact:
+    name: Trial Bench Dev Team
+
+servers:
+  - url: https://us-central1-trial-bench--crm.cloudfunctions.net
+    description: Production
+  - url: https://us-central1-trial-bench-dev-10946.cloudfunctions.net
+    description: Development
+
+tags:
+  - name: User Management
+    description: User CRUD, role assignment, and OTP verification
+  - name: Email
+    description: Sending emails (OTP, welcome, invoice, agreement)
+  - name: Agreements
+    description: Agreement lifecycle management
+  - name: Members
+    description: Member management operations
+
+paths:
+  /sendOtp:
+    post:
+      tags: [Email, User Management]
+      summary: Send OTP to email
+      description: Generates a 6-digit OTP, stores it in Firestore, and sends it via email.
+      security:
+        - firebaseAuth: []
+      x-permission: settings:manage_users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                  example: newuser@example.com
+      responses:
+        '200':
+          description: OTP sent successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: OTP sent successfully.
+        '403':
+          description: Permission denied
+
+  /verifyOtp:
+    post:
+      tags: [User Management]
+      summary: Verify OTP
+      description: Validates the OTP against the stored value.
+      security:
+        - firebaseAuth: []
+      x-permission: settings:manage_users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, otp]
+              properties:
+                email:
+                  type: string
+                  format: email
+                otp:
+                  type: string
+                  example: "123456"
+      responses:
+        '200':
+          description: OTP verified
+        '404':
+          description: OTP not found
+        '400':
+          description: Invalid OTP
+        '408':
+          description: OTP expired
+
+  /createUser:
+    post:
+      tags: [User Management]
+      summary: Create a new user
+      description: Creates a Firebase Auth user after OTP verification.
+      security:
+        - firebaseAuth: []
+      x-permission: settings:manage_users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password, otp, username]
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 6
+                otp:
+                  type: string
+                username:
+                  type: string
+      responses:
+        '200':
+          description: User created
+        '409':
+          description: Email already exists
+
+  /updateUser:
+    post:
+      tags: [User Management]
+      summary: Update user display name
+      security:
+        - firebaseAuth: []
+      x-permission: settings:manage_users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uid, username]
+              properties:
+                uid:
+                  type: string
+                username:
+                  type: string
+      responses:
+        '200':
+          description: User updated
+
+  /deleteUser:
+    post:
+      tags: [User Management]
+      summary: Delete a user
+      security:
+        - firebaseAuth: []
+      x-permission: settings:manage_users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uid]
+              properties:
+                uid:
+                  type: string
+      responses:
+        '200':
+          description: User deleted
+
+  /adminSetUserPassword:
+    post:
+      tags: [User Management]
+      summary: Admin set user password
+      security:
+        - firebaseAuth: []
+      x-permission: settings:manage_users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [uid, newPassword]
+              properties:
+                uid:
+                  type: string
+                newPassword:
+                  type: string
+                  minLength: 6
+      responses:
+        '200':
+          description: Password updated
+
+  /setUserRole:
+    post:
+      tags: [User Management]
+      summary: Assign role to user
+      description: Sets custom claims on the user's Firebase Auth token.
+      security:
+        - firebaseAuth: []
+      x-permission: settings:manage_users
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties:
+                email:
+                  type: string
+                  format: email
+                roleId:
+                  type: string
+                  description: Firestore document ID from `roles` collection. Empty to unassign.
+      responses:
+        '200':
+          description: Role assigned
+
+  /listUsers:
+    post:
+      tags: [User Management]
+      summary: List all users
+      security:
+        - firebaseAuth: []
+      x-permission: settings:manage_users
+      responses:
+        '200':
+          description: List of users
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        uid:
+                          type: string
+                        email:
+                          type: string
+                        displayName:
+                          type: string
+                        customClaims:
+                          type: object
+
+  /sendWelcomeEmail:
+    post:
+      tags: [Email]
+      summary: Send welcome email to new member
+      security:
+        - firebaseAuth: []
+      x-permission: members:add
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toEmail, username]
+              properties:
+                toEmail:
+                  type: string
+                  format: email
+                username:
+                  type: string
+                ccEmail:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Email sent
+
+  /sendInvoiceEmail:
+    post:
+      tags: [Email]
+      summary: Send invoice email with PDF attachment
+      security:
+        - firebaseAuth: []
+      x-permission: invoices:add OR invoices:edit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toEmail, customerName, invoiceNumber, pdfBase64]
+              properties:
+                toEmail:
+                  type: string
+                  format: email
+                customerName:
+                  type: string
+                invoiceNumber:
+                  type: string
+                pdfBase64:
+                  type: string
+                  format: byte
+                  description: Base64-encoded PDF
+                ccEmail:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Invoice email sent
+
+  /sendAgreementEmail:
+    post:
+      tags: [Email]
+      summary: Send agreement email with PDF attachment
+      security:
+        - firebaseAuth: []
+      x-permission: agreements:edit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [toEmail, clientName, agreementName, pdfBase64]
+              properties:
+                toEmail:
+                  type: string
+                  format: email
+                clientName:
+                  type: string
+                agreementName:
+                  type: string
+                pdfBase64:
+                  type: string
+                  format: byte
+                ccEmail:
+                  type: string
+                  format: email
+      responses:
+        '200':
+          description: Agreement email sent
+
+  /earlyExitAgreement:
+    post:
+      tags: [Agreements]
+      summary: Early exit an agreement
+      description: |
+        Terminates an agreement before its end date.
+        Moves the primary member and all sub-members to `past_members`.
+        Uses a Firestore batch write for atomicity.
+      security:
+        - firebaseAuth: []
+      x-permission: agreements:edit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [agreementId]
+              properties:
+                agreementId:
+                  type: string
+      responses:
+        '200':
+          description: Agreement terminated and members moved
+
+  /replacePrimaryMember:
+    post:
+      tags: [Members]
+      summary: Replace primary member
+      description: |
+        Replaces the primary member of a membership. Supports two modes:
+        - `replace`: Demotes old primary to sub-member
+        - `removeAndReplace`: Moves old primary to past_members
+        
+        Uses a Firestore transaction for atomicity.
+      security:
+        - firebaseAuth: []
+      x-permission: members:edit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [oldPrimaryMemberId, mode, promotionTarget]
+              properties:
+                oldPrimaryMemberId:
+                  type: string
+                mode:
+                  type: string
+                  enum: [replace, removeAndReplace]
+                promotionTarget:
+                  type: object
+                  properties:
+                    promoteMemberId:
+                      type: string
+                      description: Existing sub-member to promote
+                    newMember:
+                      type: object
+                      description: New member data to create as primary
+      responses:
+        '200':
+          description: Member replaced successfully
+
+components:
+  securitySchemes:
+    firebaseAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Firebase ID Token

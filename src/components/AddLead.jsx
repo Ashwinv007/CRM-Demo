@@ -1,0 +1,670 @@
+import { useState, useContext, useEffect } from 'react';
+import { FirebaseContext, AuthContext } from '../store/Context';
+import { collection, addDoc, doc, updateDoc, serverTimestamp } from 'firebase/firestore'; // Added serverTimestamp
+import { useNavigate } from 'react-router-dom';
+import {
+  CheckCircle,
+  ArrowBack,
+  Save,
+  Email as EmailIcon,
+  WhatsApp,
+  Cake,
+  AccountBox
+} from '@mui/icons-material';
+import {
+  Box,
+  TextField,
+  MenuItem,
+  Select,
+  Typography,
+  IconButton,
+  FormControl,
+  InputLabel,
+  FormHelperText,
+  CircularProgress
+} from '@mui/material';
+import styles from './AddLead.module.css';
+import ConversionModal from './ConversionModal'; // Import the new modal
+import { usePermissions } from '../auth/usePermissions'; // Import usePermissions
+import { toast } from 'sonner';
+import { logActivity } from '../utils/logActivity';
+
+// Helper function to format birthday
+const formatBirthday = (day, month) => {
+  if (!day || !month) return '';
+
+  const monthNamesFull = [
+    'January', 'February', 'March', 'April', 'May', 'June',
+    'July', 'August', 'September', 'October', 'November', 'December'
+  ];
+
+  const dayNum = parseInt(day, 10);
+  const monthNum = parseInt(month, 10);
+
+  if (isNaN(dayNum) || isNaN(monthNum) || dayNum < 1 || dayNum > 31 || monthNum < 1 || monthNum > 12) {
+    return '';
+  }
+
+  let suffix = 'th';
+  if (dayNum === 1 || dayNum === 21 || dayNum === 31) {
+    suffix = 'st';
+  } else if (dayNum === 2 || dayNum === 22) {
+    suffix = 'nd';
+  } else if (dayNum === 3 || dayNum === 23) {
+    suffix = 'rd';
+  }
+
+  return `${dayNum}${suffix} ${monthNamesFull[monthNum - 1]}`;
+};
+
+// Helper function to format activity timestamp
+const formatActivityTimestamp = (isoString) => {
+  if (!isoString) return '';
+  const date = new Date(isoString);
+  return date.toLocaleString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true
+  });
+};
+
+export default function AddLead() {
+  const [formData, setFormData] = useState({
+    name: '',
+    status: '',
+    purposeOfVisit: '',
+    phone: '+91',
+    sourceType: '',
+    sourceDetail: '',
+    clientType: '',
+    companyName: '',
+    convertedEmail: '',
+    ccEmail: '',
+    convertedWhatsapp: '',
+    package: ''
+  });
+
+  const [isOtherPurpose, setIsOtherPurpose] = useState(false);
+  const [showConvertedModal, setShowConvertedModal] = useState(false);
+  const [note, setNote] = useState('');
+  const [followUpDays, setFollowUpDays] = useState('');
+  const [activities, setActivities] = useState([
+    {
+      id: 1,
+      type: 'created',
+      title: 'Lead Created',
+      description: 'New lead added to the system',
+      timestamp: new Date().toISOString()
+    }
+  ]);
+
+  const [errors, setErrors] = useState({});
+  const [isSubmitted, setIsSubmitted] = useState(false);
+  const [isConversionModalOpen, setIsConversionModalOpen] = useState(false); // State for the new modal
+  const [newlyCreatedLeadId, setNewlyCreatedLeadId] = useState(null); // To store the ID of the lead just created
+  const [isSaving, setIsSaving] = useState(false);
+  const [isConverting, setIsConverting] = useState(false);
+
+  const { db } = useContext(FirebaseContext);
+  const { user } = useContext(AuthContext);
+  const { hasPermission } = usePermissions(); // Use the new usePermissions hook
+  const navigate = useNavigate();
+
+  useEffect(() => {
+    if (user) {
+      setActivities(prevActivities => {
+        const newActivities = [...prevActivities];
+        newActivities[newActivities.length - 1].user = user.displayName;
+        return newActivities;
+      });
+    }
+  }, [user]);
+
+  const handleSaveLead = async () => {
+    if (!hasPermission('leads:add')) {
+      toast.error("You don't have permission to add leads.");
+      return;
+    }
+    setIsSubmitted(true);
+    const newErrors = validateForm(formData);
+    setErrors(newErrors);
+    if (Object.keys(newErrors).length > 0) {
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const leadsCollection = collection(db, 'leads');
+      const newLeadData = {
+        ...formData,
+        activities: activities,
+        createdAt: serverTimestamp(), // Set creation timestamp
+        lastEditedAt: serverTimestamp(), // Set last edited timestamp on creation
+      };
+      const leadDocRef = await addDoc(leadsCollection, newLeadData);
+      const leadId = leadDocRef.id;
+      setNewlyCreatedLeadId(leadId); // Store the new lead ID
+
+      if (formData.status === 'Converted') {
+        setIsConversionModalOpen(true); // Open the conversion modal
+        // The modal's onConvert will handle member creation and navigation
+      } else {
+        navigate('/leads'); // For non-converted leads, just navigate
+      }
+    } catch (error) {
+      console.error("Error processing lead: ", error);
+      toast.error("Failed to save lead.");
+    }
+    finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleConvert = async (memberData) => {
+    setIsConverting(true);
+    try {
+      if (memberData.ccEmail) {
+        const tempEmail = memberData.email;
+        memberData.email = memberData.ccEmail;
+        memberData.ccEmail = tempEmail;
+      }
+      const membersCollection = collection(db, 'members');
+      const newMemberRef = await addDoc(membersCollection, {
+        ...memberData,
+        leadId: newlyCreatedLeadId, // Use the newly created lead's ID
+        primary: true,
+        createdAt: new Date().toISOString(),
+      });
+
+      // Log the activity
+      logActivity(
+        db, 
+        user, 
+        'member_added', 
+        `Converted lead "${formData.name}" to new member "${memberData.name}".`,
+        { memberId: newMemberRef.id, leadId: newlyCreatedLeadId }
+      );
+
+      // Update the lead's status to 'Converted' in Firestore (if not already)
+      // This is important if the modal was opened but the lead wasn't marked converted yet
+      const leadRef = doc(db, "leads", newlyCreatedLeadId);
+      await updateDoc(leadRef, {
+        status: 'Converted',
+        lastEditedAt: serverTimestamp(), // Update last edited timestamp
+      });
+
+      // Create agreement document
+      const agreementsCollection = collection(db, 'agreements');
+      await addDoc(agreementsCollection, {
+        leadId: newlyCreatedLeadId,
+        name: formData.name, // Use lead's name
+        company: formData.companyName,
+        memberLegalName: "",
+        memberAddress: "", 
+        memberCIN: "Not Applicable", 
+        memberGST: "Not Applicable", 
+        memberPAN: "Not Applicable", 
+        memberKYC: "Not Applicable", 
+        agreementDate: new Date().toISOString().split('T')[0], 
+        agreementNumber: "", 
+        startDate: new Date().toISOString().split('T')[0], 
+        endDate: "", 
+        servicePackage: memberData.package, 
+        serviceQuantity: 1, 
+        totalMonthlyPayment: "", 
+        authorizorName: "", 
+        designation: "", 
+        preparedByNew: "", 
+        clientAuthorizorName: "", 
+        clientAuthorizorTitle: "", 
+        agreementLength: "", 
+        convertedEmail: memberData.email,
+        ccEmail: memberData.ccEmail || '', 
+        phone: memberData.whatsapp, 
+        purposeOfVisit: memberData.package, 
+        status: "active", 
+        createdAt: serverTimestamp(), // Use serverTimestamp for createdAt
+        lastEditedAt: serverTimestamp(), // Set lastEditedAt on creation
+      });
+
+      setIsConversionModalOpen(false);
+      navigate('/members');
+    } catch (error) {
+      console.error("Error converting lead: ", error);
+      toast.error("Failed to convert lead.");
+    } finally {
+      setIsConverting(false);
+    }
+  };
+
+  const handleInputChange = (e) => {
+    const { name, value } = e.target;
+
+    if (name === 'purposeOfVisit_select') {
+        if (value === 'Others') {
+            setIsOtherPurpose(true);
+            setFormData(prev => ({...prev, purposeOfVisit: ''}));
+        } else {
+            setIsOtherPurpose(false);
+            setFormData(prev => ({...prev, purposeOfVisit: value}));
+        }
+        return;
+    }
+
+    setFormData(prev => {
+      let newState = {...prev, [name]: value};
+
+      if (name === 'clientType' && value === 'Individual') {
+        newState.companyName = 'N/A';
+      }
+
+      if (name === 'status' && value === 'Converted') {
+        newState.convertedWhatsapp = prev.phone;
+      }
+
+      if (name === 'phone' && showConvertedModal) {
+        newState.convertedWhatsapp = value;
+      }
+
+      // When sourceType changes, reset sourceDetail if not applicable
+      if (name === 'sourceType' && value !== 'Referral' && value !== 'Social Media') {
+        newState.sourceDetail = '';
+      }
+
+      // Validate immediately after setting the new state, ONLY IF form has been submitted once
+      if (isSubmitted) {
+        const updatedErrors = validateForm(newState);
+        setErrors(updatedErrors);
+      }
+
+      return newState;
+    });
+
+    if (name === 'status' && value === 'Converted') {
+      setShowConvertedModal(true);
+    } else if (name === 'status' && value !== 'Converted') {
+      setShowConvertedModal(false);
+    }
+  };
+
+  const handleAddNote = () => {
+    if (!note.trim()) return;
+
+    const newActivity = {
+      id: activities.length + 1,
+      type: 'note',
+      title: followUpDays ? `Note Added - Follow up in ${followUpDays} days` : 'Note Added',
+      description: note,
+      user: user ? user.displayName : 'Unknown User',
+      timestamp: new Date().toISOString(),
+      hasFollowUp: !!followUpDays,
+      followUpDays: followUpDays
+    };
+
+    setActivities([newActivity, ...activities]);
+    setNote('');
+    setFollowUpDays('');
+  };
+
+  const validateForm = (data) => {
+    const newErrors = {};
+    if (!data.name.trim()) newErrors.name = 'Name is required';
+    if (!data.purposeOfVisit) newErrors.purposeOfVisit = 'Purpose of Visit is required';
+    if (data.phone.trim().length <= 3) newErrors.phone = 'Phone number is required (excluding country code)';
+    if (!data.sourceType) newErrors.sourceType = 'Source is required';
+    if (data.sourceType === 'Referral' && !data.sourceDetail.trim()) newErrors.sourceDetail = 'Referral Person Name is required';
+    if (data.sourceType === 'Social Media' && !data.sourceDetail.trim()) newErrors.sourceDetail = 'Social Media Platform is required';
+    if (!data.status) newErrors.status = 'Status is required';
+
+    if (data.status === 'Converted') {
+      if (!data.clientType) newErrors.clientType = 'Client Type is required';
+      if (data.clientType === 'Company' && !data.companyName.trim()) newErrors.companyName = 'Company Name is required';
+      if (!data.convertedEmail.trim()) {
+        newErrors.convertedEmail = 'Email is required';
+      } else if (!/^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/.test(data.convertedEmail)) {
+        newErrors.convertedEmail = 'Invalid email format';
+      }
+      if (!data.convertedWhatsapp.trim()) {
+        newErrors.convertedWhatsapp = 'WhatsApp is required';
+      } else if (!/^\+\d{10,}$/.test(data.convertedWhatsapp)) {
+        newErrors.convertedWhatsapp = 'WhatsApp number must include country code (e.g., +91XXXXXXXXXX)';
+      }
+      if (data.ccEmail && !/^(([^<>()[\]\\.,;:\s@"]+(\.[^<>()[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$/.test(data.ccEmail)) {
+        newErrors.ccEmail = 'Invalid CC email format';
+      }
+    }
+
+    return newErrors;
+  };
+
+  return (
+    <div className={styles.container}>
+      <div className={styles.content}>
+        {/* Header */}
+        <div className={styles.header}>
+
+          <div className={styles.headerText}>
+            <h1 className={styles.title}>Add New Lead</h1>
+            <p className={styles.subtitle}>Capture and manage new lead information</p>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className={styles.mainContent}>
+          {/* Left Panel - Lead Information */}
+          <div className={styles.leftPanel}>
+            <div className={styles.formCard}>
+              <h2 className={styles.sectionTitle}>Lead Information</h2>
+
+              {/* Name */}
+              <div className={styles.formGroup}>
+                <label className={styles.label}>Name *</label>
+                <input
+                  type="text"
+                  name="name"
+                  value={formData.name}
+                  onChange={handleInputChange}
+                  placeholder="Enter full name"
+                  className={`${styles.input} ${errors.name ? styles.inputError : ''}`}
+                  required
+                />
+                {errors.name && <p className={styles.errorMessage}>{errors.name}</p>}
+              </div>
+
+
+
+
+
+              {/* Purpose of Visit */}
+              <div className={styles.formGroup}>
+                <label className={styles.label}>Purpose of Visit *</label>
+                <select
+                  name="purposeOfVisit_select"
+                  value={isOtherPurpose ? 'Others' : formData.purposeOfVisit}
+                  onChange={handleInputChange}
+                  className={`${styles.select} ${errors.purposeOfVisit ? styles.inputError : ''}`}
+                  required
+                >
+                  <option value="">Select purpose</option>
+                  <option value="Dedicated Desk">Dedicated Desk</option>
+                  <option value="Flexible Desk">Flexible Desk</option>
+                  <option value="Private Cabin">Private Cabin</option>
+                  <option value="Virtual Office">Virtual Office</option>
+                  <option value="Meeting Room">Meeting Room</option>
+                  <option value="Day Pass">Day Pass</option>
+                  <option value="Others">Others</option>
+                </select>
+                {errors.purposeOfVisit && !isOtherPurpose && <p className={styles.errorMessage}>{errors.purposeOfVisit}</p>}
+              </div>
+
+              {isOtherPurpose && (
+                <div className={styles.formGroup}>
+                  <label className={styles.label}>Other Purpose *</label>
+                  <input
+                    type="text"
+                    name="purposeOfVisit"
+                    value={formData.purposeOfVisit}
+                    onChange={handleInputChange}
+                    placeholder="Please specify"
+                    className={`${styles.input} ${errors.purposeOfVisit ? styles.inputError : ''}`}
+                    required
+                  />
+                  {errors.purposeOfVisit && <p className={styles.errorMessage}>{errors.purposeOfVisit}</p>}
+                </div>
+              )}
+
+              <div className={styles.formGroup}>
+                <label className={styles.label}>Phone *</label>
+                <input
+                  type="text"
+                  name="phone"
+                  value={formData.phone}
+                  onChange={handleInputChange}
+                  placeholder="Enter phone number"
+                  className={`${styles.input} ${errors.phone ? styles.inputError : ''}`}
+                  required
+                />
+                {errors.phone && <p className={styles.errorMessage}>{errors.phone}</p>}
+              </div>
+
+              {/* Source */}
+              <div className={styles.formGroup}>
+                <label className={styles.label}>Source *</label>
+                <select
+                  name="sourceType"
+                  value={formData.sourceType}
+                  onChange={handleInputChange}
+                  className={`${styles.select} ${errors.sourceType ? styles.inputError : ''}`}
+                  required
+                >
+                  <option value="">Select source</option>
+                  <option value="Walk-in">Walk-in</option>
+                  <option value="Phone">Phone</option>
+                  <option value="Referral">Referral</option>
+                  <option value="Event">Event</option>
+                  <option value="Website">Website</option>
+                  <option value="Social Media">Social Media</option>
+                  <option value="Other">Other</option>
+                </select>
+                {errors.sourceType && <p className={styles.errorMessage}>{errors.sourceType}</p>}
+              </div>
+
+              {/* Referral Name */}
+              {formData.sourceType === 'Referral' && (
+                <div className={styles.formGroup}>
+                  <label className={styles.label}>Referral Person Name *</label>
+                  <input
+                    type="text"
+                    name="sourceDetail"
+                    value={formData.sourceDetail}
+                    onChange={handleInputChange}
+                    placeholder="Enter referral person name"
+                    className={`${styles.input} ${errors.sourceDetail ? styles.inputError : ''}`}
+                    required
+                  />
+                  {errors.sourceDetail && <p className={styles.errorMessage}>{errors.sourceDetail}</p>}
+                </div>
+              )}
+
+              {/* Social Media Platform */}
+              {formData.sourceType === 'Social Media' && (
+                <div className={styles.formGroup}>
+                  <label className={styles.label}>Social Media Platform *</label>
+                  <input
+                    type="text"
+                    name="sourceDetail"
+                    value={formData.sourceDetail}
+                    onChange={handleInputChange}
+                    placeholder="e.g., Instagram, LinkedIn, Facebook"
+                    className={`${styles.input} ${errors.sourceDetail ? styles.inputError : ''}`}
+                    required
+                  />
+                  {errors.sourceDetail && <p className={styles.errorMessage}>{errors.sourceDetail}</p>}
+                </div>
+              )}
+
+              {/* Status */}
+              <div className={styles.formGroup}>
+                <label className={styles.label}>Status *</label>
+                <select
+                  name="status"
+                  value={formData.status}
+                  onChange={handleInputChange}
+                  className={`${styles.select} ${errors.status ? styles.inputError : ''}`}
+                  required
+                >
+                  <option value="">Select status</option>
+                  <option value="New">New</option>
+                  <option value="Follow Up">Follow Up</option>
+                  <option value="Converted">Converted</option>
+                  <option value="Not Interested">Not Interested</option>
+                </select>
+                {errors.status && <p className={styles.errorMessage}>{errors.status}</p>}
+              </div>
+
+              {/* Converted Modal Fields */}
+              {showConvertedModal && (
+                <div className={styles.convertedSection}>
+                  <h3 className={styles.convertedTitle}>Client Onboarding Details</h3>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Client Type *</label>
+                    <select
+                      name="clientType"
+                      value={formData.clientType}
+                      onChange={handleInputChange}
+                      className={`${styles.select} ${errors.clientType ? styles.inputError : ''}`}
+                      required
+                    >
+                      <option value="">Select client type</option>
+                      <option value="Individual">Individual</option>
+                      <option value="Company">Company</option>
+                    </select>
+                    {errors.clientType && <p className={styles.errorMessage}>{errors.clientType}</p>}
+                  </div>
+
+                  {formData.clientType === 'Company' && (
+                    <div className={styles.formGroup}>
+                      <label className={styles.label}>Company Name *</label>
+                      <input
+                        type="text"
+                        name="companyName"
+                        value={formData.companyName}
+                        onChange={handleInputChange}
+                        placeholder="Enter company name"
+                        className={`${styles.input} ${errors.companyName ? styles.inputError : ''}`}
+                        required
+                      />
+                      {errors.companyName && <p className={styles.errorMessage}>{errors.companyName}</p>}
+                    </div>
+                  )}
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>Email *</label>
+                    <input
+                      type="email"
+                      name="convertedEmail"
+                      value={formData.convertedEmail}
+                      onChange={handleInputChange}
+                      placeholder="Enter email address"
+                      className={`${styles.input} ${errors.convertedEmail ? styles.inputError : ''}`}
+                      required
+                    />
+                    {errors.convertedEmail && <p className={styles.errorMessage}>{errors.convertedEmail}</p>}
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>CC Email</label>
+                    <input
+                      type="email"
+                      name="ccEmail"
+                      value={formData.ccEmail}
+                      onChange={handleInputChange}
+                      placeholder="Enter CC email address"
+                      className={`${styles.input} ${errors.ccEmail ? styles.inputError : ''}`}
+                    />
+                    {errors.ccEmail && <p className={styles.errorMessage}>{errors.ccEmail}</p>}
+                  </div>
+
+                  <div className={styles.formGroup}>
+                    <label className={styles.label}>WhatsApp *</label>
+                        <input
+                      type="text"
+                      name="convertedWhatsapp"
+                      value={formData.convertedWhatsapp}
+                      onChange={handleInputChange}
+                      placeholder="Enter WhatsApp number"
+                      className={`${styles.input} ${errors.convertedWhatsapp ? styles.inputError : ''}`}
+                      required
+                    />
+                    {errors.convertedWhatsapp && <p className={styles.errorMessage}>{errors.convertedWhatsapp}</p>}
+                  </div>
+                </div>
+              )}
+
+              {/* Save Button */}
+              <button className={styles.saveButton} onClick={handleSaveLead} disabled={isSaving}>
+                {isSaving ? <CircularProgress size={24} color="inherit" /> : <><Save className={styles.buttonIcon} /> Save Lead</>}
+              </button>
+            </div>
+          </div>
+
+          {/* Right Panel - Timeline Activity Log */}
+          <div className={styles.rightPanel}>
+            <div className={styles.timelineCard}>
+              <h2 className={styles.sectionTitle}>Timeline Activity Log</h2>
+
+              {/* Add Note Section */}
+              <div className={styles.addNoteSection}>
+                <h3 className={styles.addNoteTitle}>Add Note</h3>
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  placeholder="Enter activity note..."
+                  className={styles.textarea}
+                  rows="3"
+                />
+
+                {/* Follow-up Reminder */}
+                <div className={styles.followUpSection}>
+                  <input
+                    type="number"
+                    value={followUpDays}
+                    onChange={(e) => setFollowUpDays(e.target.value)}
+                    placeholder="Follow up in (days)"
+                    className={styles.followUpInput}
+                    min="1"
+                  />
+                </div>
+
+                <button className={styles.addToTimelineButton} onClick={handleAddNote}>
+                  <CheckCircle className={styles.buttonIcon} />
+                  Add to Timeline
+                </button>
+              </div>
+
+              {/* Activity Timeline */}
+              <div className={styles.timeline}>
+                {activities.map((activity, index) => (
+                  <div key={activity.id} className={styles.timelineItem}>
+                    <div className={styles.timelineIconWrapper}>
+                      <div className={`${styles.timelineIcon} ${styles[activity.type]}`}>
+                        {activity.type === 'created' && <CheckCircle />}
+                        {activity.type === 'note' && <AccountBox />}
+                        {activity.type === 'email' && <EmailIcon />}
+                      </div>
+                      {index < activities.length - 1 && <div className={styles.timelineLine} />}
+                    </div>
+                    <div className={styles.timelineContent}>
+                      <div className={styles.timelineHeader}>
+                        <h4 className={styles.timelineTitle}>{activity.title}</h4>
+                        <span className={styles.timelineTimestamp}>{formatActivityTimestamp(activity.timestamp)}</span>
+                      </div>
+                      <p className={styles.timelineDescription}>{activity.description}</p>
+                      {activity.user && <p className={styles.activityUser}>by {activity.user}</p>}
+                      {activity.hasFollowUp && (
+                        <div className={styles.followUpBadge}>
+                          Follow up reminder set for {activity.followUpDays} days
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <ConversionModal
+        open={isConversionModalOpen}
+        onClose={() => setIsConversionModalOpen(false)}
+        leadData={{...formData, id: newlyCreatedLeadId}}
+        onConvert={handleConvert}
+        isConverting={isConverting}
+      />
+    </div>
+  );
+}

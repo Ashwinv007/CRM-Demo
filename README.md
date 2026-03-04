@@ -1,73 +1,115 @@
+> **Note:** This repository demonstrates a real-world CRM implementation.
+> Client branding appears only in generated documents (invoices/agreements) to reflect authentic business workflows.
+> No sensitive data, credentials, or proprietary client systems are exposed.
 
-# Note:
-This repository demonstrates a real-world CRM implementation.
-Client branding appears only in generated documents (invoices/agreements)
-to reflect authentic business workflows.
-No sensitive data, credentials, or proprietary client systems are exposed.
+# Trial Bench
+
+A role-based CRM web application for managing leads, members, agreements, invoices, and expenses — built with React and Firebase.
+
+## Tech Stack
+
+- **Frontend:** React 19, React Router v7, MUI v7, Recharts, pdf-lib
+- **Backend:** Firebase (Firestore, Auth, Cloud Functions v2)
+- **Email:** Nodemailer via Zoho SMTP (Cloud Function)
+- **Deployment:** Firebase Hosting
+
+## Features
+
+- **Dashboard** — KPI overview with charts and recent activity
+- **Leads** — Add, edit, and track prospective clients through the pipeline
+- **Members** — Active member profiles with agreement and invoice history
+- **Past Members** — Archived records for exited members
+- **Agreements** — Generate and manage PDF membership agreements
+- **Invoices** — Create and download PDF invoices
+- **Expenses** — Track expenses by category with report exports
+- **Logs** — Immutable audit trail of user actions
+- **Settings** — Manage roles, users, and email templates
+- **Role-Based Access Control** — Granular per-route and per-collection permissions enforced on both client and Firestore rules
+
+## Project Structure
+
+```
+trial_bench/
+├── src/
+│   ├── pages/          # Route-level page components
+│   ├── components/     # Shared UI components
+│   ├── store/          # React context (Auth, Data)
+│   ├── auth/           # ProtectedRoute guard
+│   ├── firebase/       # Firebase config & initialization
+│   └── utils/          # Helpers (PDF generation, formatters, etc.)
+├── functions/          # Firebase Cloud Functions (Node 22)
+│   └── index.js        # OTP, scheduled jobs, Firestore triggers
+├── scripts/            # One-off migration & maintenance scripts
+├── firestore.rules     # Role-based Firestore security rules
+└── firestore.indexes.json
+```
+
+## Getting Started
+
+### Prerequisites
+
+- Node.js 18+
+- Firebase CLI: `npm install -g firebase-tools`
+
+### Install dependencies
+
+```bash
+# Frontend
+npm install
+
+# Cloud Functions
+cd functions && npm install
+```
+
+### Environment
+
+Create a `.env` file in the project root with your Firebase project config:
+
+```
+REACT_APP_FIREBASE_API_KEY=...
+REACT_APP_FIREBASE_AUTH_DOMAIN=...
+REACT_APP_FIREBASE_PROJECT_ID=...
+REACT_APP_FIREBASE_STORAGE_BUCKET=...
+REACT_APP_FIREBASE_MESSAGING_SENDER_ID=...
+REACT_APP_FIREBASE_APP_ID=...
+```
+
+Update the SMTP credentials in `functions/index.js` before deploying.
 
 ## Available Scripts
 
-In the project directory, you can run:
+### Frontend
 
-### `npm start`
+| Command | Description |
+|---|---|
+| `npm start` | Start dev server at `http://localhost:3000` |
+| `npm run build` | Production build to `build/` |
+| `npm run build:dev` | Build using `.env.development` |
+| `npm test` | Run tests in watch mode |
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+### Cloud Functions
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+| Command | Description |
+|---|---|
+| `npm run serve` | Start local emulator |
+| `npm run deploy` | Deploy functions to Firebase |
+| `npm run logs` | Tail function logs |
 
-### `npm test`
+## Deployment
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+```bash
+# Deploy everything
+firebase deploy
 
-### `npm run build`
+# Deploy only functions
+firebase deploy --only functions
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+# Deploy only hosting
+firebase deploy --only hosting
+```
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+## Permissions
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+Permissions are stored per role in Firestore (`/roles/{roleId}`) and checked on both the client (via `ProtectedRoute`) and server (via Firestore rules and Cloud Function helpers).
 
-### `npm run eject`
-
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
-
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
-
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
-
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
-
-## Learn More
-
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
-
-To learn React, check out the [React documentation](https://reactjs.org/).
-
-### Code Splitting
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
-
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
+Key permissions: `leads:view`, `leads:add`, `leads:edit`, `leads:delete`, `members:view`, `members:add`, `members:edit`, `members:delete`, `agreements:view/add/edit/delete`, `invoices:view/add/edit/delete`, `expenses:view/add/edit/delete`, `logs:view`, `settings:manage_roles`, `settings:manage_users`, `settings:manage_templates`. Admins with the `all` permission bypass all checks.
